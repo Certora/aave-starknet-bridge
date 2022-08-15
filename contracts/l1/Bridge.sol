@@ -287,7 +287,7 @@ contract Bridge is IBridge, VersionedInitializable {
         uint256 amount,
         uint256 blockNumber,
         uint256 currentRewardsIndex
-    ) internal {
+    ) internal virtual {
         uint256[] memory payload = new uint256[](9);
         payload[0] = uint256(uint160(from));
         payload[1] = l2Recipient;
@@ -308,7 +308,7 @@ contract Bridge is IBridge, VersionedInitializable {
         address from,
         uint256 blockNumber,
         uint256 currentRewardsIndex
-    ) internal {
+    ) internal virtual {
         uint256[] memory payload = new uint256[](6);
         payload[0] = uint256(uint160(from));
         payload[1] = _aTokenData[l1Token].l2TokenAddress;
@@ -328,7 +328,7 @@ contract Bridge is IBridge, VersionedInitializable {
         address recipient,
         uint256 amount,
         uint256 l2RewardsIndex
-    ) internal {
+    ) internal virtual {
         uint256[] memory payload = new uint256[](8);
         payload[0] = Cairo.TRANSFER_FROM_STARKNET;
         payload[1] = uint256(uint160(l1Token));
@@ -407,7 +407,7 @@ contract Bridge is IBridge, VersionedInitializable {
         uint256 l2sender,
         address recipient,
         uint256 amount
-    ) internal {
+    ) internal virtual {
         uint256[] memory payload = new uint256[](5);
         payload[0] = Cairo.BRIDGE_REWARD_MESSAGE;
         payload[1] = l2sender;
