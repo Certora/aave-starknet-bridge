@@ -52,10 +52,12 @@ methods {
     _staticToDynamicAmount_Wrapper(uint256, address, address) envfree //(ILendingPool)
     _dynamicToStaticAmount_Wrapper(uint256, address, address) envfree //(ILendingPool)
     _computeRewardsDiff_Wrapper(uint256, uint256, uint256) envfree
+    getRewardBalance(address) returns(uint256) envfree
     _getCurrentRewardsIndex_Wrapper(address) returns (uint256) 
     initiateWithdraw_L2(address, uint256, address, bool)
     bridgeRewards_L2(address, uint256)
     getUnderlyingAssetOfAToken(address) returns (address) envfree
+    getInitializing() returns (bool) envfree
     underlyingtoAToken(address) returns (address) => DISPATCHER(true)
 
 /******************************
@@ -135,6 +137,8 @@ methods {
 // Definition of RAY unit
 definition RAY() returns uint256 = 10^27;
 
+definition ZERO_ADDRESS returns address = 0;
+
 // Used for the Ray math summarization.
 // Effectively sets the liquidity index in L1 to be a constant, given
 // by the following value.
@@ -161,9 +165,112 @@ definition messageSentFilter(method f) returns bool =
     f.selector != withdraw(address, uint256, address, uint256, uint256, bool).selector;
 
 ////////////////////////////////////////////////////////////////////////////
-//                       Rules                                            //
+//                       Rules start                                      //
 ////////////////////////////////////////////////////////////////////////////
 
+invariant zeroAddressDoesNotHaveAToken(env e)
+    tokenBalanceOf(e, ATOKEN_A, ZERO_ADDRESS()) == 0
+
+invariant zeroAddressDoesNotHaveStaticToken(env e)
+    tokenBalanceOf(e, STATIC_ATOKEN_A, ZERO_ADDRESS()) == 0 
+
+
+rule tokenBalanceOfUserCanNotBeChangedByOther(method f)
+filtered{f -> messageSentFilter(f)} {
+    calldataarg args;
+    address user;
+    address asset;
+    address AToken;
+    address static;
+    address recipient;
+    env e;
+
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+    setupUser(recipient);
+
+    uint256 underlyingBalanceBefore = tokenBalanceOf(e, asset, recipient);
+    uint256 aTokenBalanceBefore = tokenBalanceOf(e, AToken, recipient);
+    uint256 staticTokenBalanceBefore = tokenBalanceOf(e, static, recipient);
+
+    f(e, args);
+
+    uint256 underlyingBalanceAfter = tokenBalanceOf(e, asset, recipient);
+    uint256 aTokenBalanceAfter = tokenBalanceOf(e, AToken, recipient);
+    uint256 staticTokenBalanceAfter = tokenBalanceOf(e, static, recipient);
+
+    assert underlyingBalanceBefore > underlyingBalanceAfter => e.msg.sender == recipient;
+    assert aTokenBalanceBefore > aTokenBalanceAfter => e.msg.sender == recipient;
+    assert staticTokenBalanceBefore > staticTokenBalanceAfter => e.msg.sender == recipient;
+}
+
+rule canNotInitializeTwice()
+{
+    env e;
+    calldataarg args;
+
+    require getInitializing() == false;
+
+    initialize(e, args);
+
+    initialize@withrevert(e, args);
+    bool secondSucceeded = lastReverted;
+
+    assert secondSucceeded;
+}
+
+rule increasingIntegrityOfRewardBalance(method f, env e, calldataarg args)
+filtered{f -> messageSentFilter(f) && f.selector != bridgeRewards_L2(address, uint256).selector} {
+    address user;
+    address asset;
+    address Atoken;
+    address static;
+    address recipient;
+    uint256 amount;
+    bool fromUnderlyingAsset;
+
+    setupTokens(asset, Atoken, static);
+    requireValidUser(user);
+
+    uint256 rewardTokenBalanceBefore = getRewardBalance(user);
+    callFunctionSetParams(f,e,recipient,Atoken,asset,amount,fromUnderlyingAsset);
+    uint256 rewardTokenBalanceAfter = getRewardBalance(user);
+
+    assert rewardTokenBalanceAfter >= rewardTokenBalanceBefore, "rewardTokenBalance should not decrease after the call";
+}
+
+rule bridgeRewardsNotInterferenceWithRewardBalance(method f, env e)
+filtered{f -> messageSentFilter(f)} {
+    address asset;
+    address Atoken;
+    address static;
+    address recipient;
+    uint256 amount;
+    bool fromToUnderlyingAsset;
+    uint16 referralCode;
+
+    setupTokens(asset, Atoken, static);
+
+    requireValidUser(e.msg.sender);
+
+    uint256 senderRewardBalanceBefore = getRewardBalance(e.msg.sender);
+    uint256 recipientRewardBalanceBefore = getRewardBalance(recipient);
+
+    bridgeRewards_L2(e,recipient,amount);
+
+    uint256 senderRewardBalanceAfter = getRewardBalance(e.msg.sender);
+    uint256 recipientRewardBalanceAfter = getRewardBalance(recipient);
+
+    uint256 balanceSumBefore = senderRewardBalanceBefore + recipientRewardBalanceBefore;
+    uint256 balanceSumAfter = senderRewardBalanceBefore + recipientRewardBalanceBefore;
+
+    assert balanceSumBefore == balanceSumAfter;
+   
+}
+
+////////////////////////////////////////////////////////////////////////////
+//                       Rules end                                        //
+////////////////////////////////////////////////////////////////////////////
 /*
     @Rule - a template for rule description:
 
