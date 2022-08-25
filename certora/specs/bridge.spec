@@ -47,6 +47,8 @@ methods {
  *************************/
     // Note that these methods take as args OR return the contract types that are written in comment to their right.
     // In CVL we contracts are addresses an therefore we demand return of an address
+    getRewardToken() returns (address) envfree
+    // getApprovedL1TokensLength() returns (uint256)
     getATokenOfUnderlyingAsset(address, address) returns (address) envfree
     getLendingPoolOfAToken(address) returns (address) envfree //(ILendingPool)
     _staticToDynamicAmount_Wrapper(uint256, address, address) envfree //(ILendingPool)
@@ -114,7 +116,9 @@ methods {
  ******************/
     UNDERLYING_ASSET_ADDRESS() returns (address) => DISPATCHER(true)
     ATOKEN_A.UNDERLYING_ASSET_ADDRESS() returns (address) envfree
-    ATOKEN_B.UNDERLYING_ASSET_ADDRESS() returns (address) envfree  
+    ATOKEN_B.UNDERLYING_ASSET_ADDRESS() returns (address) envfree 
+    STATIC_ATOKEN_A.totalSupply() returns  (uint256) envfree
+    STATIC_ATOKEN_B.totalSupply() returns  (uint256) envfree
     claimRewards(address) returns (uint256) => DISPATCHER(true)
     getRewTokenAddress() returns (address) => rewardToken()
 
@@ -159,6 +163,12 @@ definition messageSentFilter(method f) returns bool =
     f.selector != receiveRewards(uint256, address, uint256).selector
     &&
     f.selector != withdraw(address, uint256, address, uint256, uint256, bool).selector;
+
+// The following definition shall be used later in some invariants,
+// by filtering only 'initialize' function.
+definition initializeFilter(method f) returns bool =
+    f.selector == 
+    initialize(uint256, address, address, address[], uint256[]).selector; 
 
 ////////////////////////////////////////////////////////////////////////////
 //                       Rules                                            //
@@ -575,3 +585,213 @@ function rayDivConst(uint256 a, uint256 b) returns uint256
     require a <= (max_uint - myValue/2) / RAY();
     return to_uint256((2*a + val_Ray) / (2*val_Ray));
 }
+
+
+////////////////////////////////////////////////////////////////////////////
+//                 Added Functions/Rules/Invariants/Etc                   //
+////////////////////////////////////////////////////////////////////////////
+/*
+// Checks basic properties of claim rewards in L2 and bridge to L1
+rule integrityOfBridgingRewards(address recipient){
+    env e;
+    address underlying;
+    address static;
+    address aToken;
+    address rewardToken;
+    uint256 rewardAmount; 
+
+    setupTokens(underlying, aToken, static);
+    setupUser(e.msg.sender);
+
+    require rewardToken == getRewardToken();
+    require recipient != aToken;
+    require recipient != currentContract;
+    require recipient != e.msg.sender;
+    require rewardAmount > 0;
+
+    uint256 underlyingBalanceBefore = tokenBalanceOf(e, underlying, recipient);
+    uint256 aTokenBalanceBefore = tokenBalanceOf(e, aToken, recipient);
+    uint256 rewardTokenBalanceBefore = tokenBalanceOf(e, rewardToken, recipient);
+
+    require rewardAmount > 0;
+
+    bridgeRewards_L2(e, recipient, rewardAmount);
+
+    uint256 underlyingBalanceAfter = tokenBalanceOf(e, underlying, recipient);
+    uint256 aTokenBalanceAfter = tokenBalanceOf(e, aToken, recipient);
+    uint256 rewardTokenBalanceAfter = tokenBalanceOf(e, rewardToken, recipient);
+
+    assert underlyingBalanceAfter == underlyingBalanceBefore, "underlying balance changed";
+    assert aTokenBalanceAfter == aTokenBalanceBefore, "aToken balance changed";
+    assert rewardTokenBalanceAfter == rewardTokenBalanceBefore + rewardAmount, "rewardToken balance invalid";
+}
+
+// Checks basic properties of deposit
+rule integrityOfDeposit(address recipient){
+    bool fromUnderlyingAsset;
+    uint16 referralCode;
+    uint256 amount; 
+    env e;
+    address underlying;
+    address static;
+    address aToken;
+    address lendingPool = getLendingPoolOfAToken(aToken);
+    
+    setupTokens(underlying, aToken, static);
+    setupUser(e.msg.sender);
+
+    require amount > 0;
+    require recipient != aToken;
+    require recipient != currentContract;
+
+    uint256 underlyingBalanceBefore = tokenBalanceOf(e, underlying, e.msg.sender);
+    uint256 aTokenBalanceBefore = tokenBalanceOf(e, aToken, e.msg.sender);
+    uint256 bridgeBalanceBefore = tokenBalanceOf(e, aToken);
+    uint256 staticBalanceBefore = tokenBalanceOf(e, static, recipient);
+
+    //Need to verify the balance because 
+    if (fromUnderlyingAsset){
+        require amount <= underlyingBalanceBefore;
+    } else {
+        require amount <= aTokenBalanceBefore;
+    }
+
+    uint256 staticAmount = _dynamicToStaticAmount_Wrapper(
+        amount,
+        underlying,
+        lendingPool
+    );
+    
+    deposit(e,aToken, recipient, amount, referralCode, fromUnderlyingAsset);
+
+    uint256 underlyingBalanceAfter = tokenBalanceOf(e, underlying, e.msg.sender);
+    uint256 aTokenBalanceAfter = tokenBalanceOf(e, aToken, e.msg.sender);
+    uint256 bridgeBalanceAfter = tokenBalanceOf(e, aToken);
+    uint256 staticBalanceAfter = tokenBalanceOf(e, static, recipient);
+
+    if (fromUnderlyingAsset){
+        assert 
+        (underlyingBalanceAfter < underlyingBalanceBefore) &&
+        (aTokenBalanceAfter == aTokenBalanceBefore);
+    }
+    else{
+        assert 
+        (aTokenBalanceAfter < aTokenBalanceBefore) &&
+        (underlyingBalanceAfter == underlyingBalanceBefore);
+    }
+
+    assert bridgeBalanceAfter > bridgeBalanceBefore;
+    assert staticBalanceAfter > staticBalanceBefore;
+}
+
+// Only withdraw and updateL2State functions can update L2 index
+rule integritySynchronizationLayers(method f) 
+filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
+    env e;    
+    address asset;
+    address AToken;
+    address static;
+    address recipient;
+    bool fromToUA;
+    uint256 amount;
+    
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+
+    uint256 l2IndexBefore = BRIDGE_L2.l2RewardsIndex();
+
+    // Call any interface function 
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
+
+    uint256 l2IndexAfter = BRIDGE_L2.l2RewardsIndex();
+
+    require l2IndexBefore != l2IndexAfter;
+    assert f.selector != withdraw(address, uint256, address, uint256, uint256, bool).selector ||
+    f.selector != updateL2State(address).selector;
+}
+
+// Withdraw with 0 static balance don't change other balance
+rule withdrawZeroBalance(){
+    bool toUnderlyingAsset;
+    uint256 staticAmount; 
+    env e; calldataarg args;
+    address underlying;
+    address static;
+    address aToken;
+    address recipient;
+    
+    setupTokens(underlying, aToken, static);
+    setupUser(e.msg.sender);
+    require recipient != aToken;
+    require recipient != currentContract;
+
+    uint256 underlyingBalanceBefore = tokenBalanceOf(e, underlying, recipient);
+    uint256 aTokenBalanceBefore = tokenBalanceOf(e, aToken, recipient);
+    uint256 staticTokenBalanceBefore = tokenBalanceOf(e, static, e.msg.sender);
+
+    require staticTokenBalanceBefore == 0;
+
+    initiateWithdraw_L2(e, aToken, staticAmount, recipient, toUnderlyingAsset);
+
+    uint256 underlyingBalanceAfter = tokenBalanceOf(e, underlying, recipient);
+    uint256 aTokenBalanceAfter = tokenBalanceOf(e, aToken, recipient);
+    uint256 staticTokenBalanceAfter = tokenBalanceOf(e, static, e.msg.sender);
+
+    assert staticTokenBalanceAfter == staticTokenBalanceBefore;
+    assert underlyingBalanceAfter == underlyingBalanceBefore;
+    assert aTokenBalanceAfter == aTokenBalanceBefore;
+}
+
+// Supply of Static AToken should not be more than AToken supply
+rule checkSupplyStaticATokenToAToken(method f) 
+filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
+    env e;    
+    address asset;
+    address AToken;
+    address static;
+    address recipient;
+    bool fromToUA;
+    uint256 amount;
+    
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+
+    uint256 supplyStaticATokenBefore = STATIC_ATOKEN_A.totalSupply();
+    uint256 supplyATokenBefore = scaledTotalSupply(e);
+
+    require supplyATokenBefore >= supplyStaticATokenBefore;
+
+    // Call any interface function 
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
+
+    uint256 supplyStaticATokenAfter = STATIC_ATOKEN_A.totalSupply();
+    uint256 supplyATokenAfter = scaledTotalSupply(e);
+
+    assert supplyATokenAfter >= supplyStaticATokenAfter;
+}
+
+ghost mathint totalApprovedTokens {
+    init_state axiom totalApprovedTokens == 0;
+}
+
+hook Sstore _aTokenData[KEY address token].l2TokenAddress uint256 tokenAddress
+    (uint256 old_tokenAddress) STORAGE {
+        // When is adding a new l2TokenAddress to ATokenData
+        if(old_tokenAddress == 0 && tokenAddress != 0){
+            totalApprovedTokens = totalApprovedTokens + 1;
+        }
+}
+
+invariant integrityApprovedTokensAndTokenData(env e)
+    totalApprovedTokens == getApprovedL1TokensLength(e)
+    filtered{f -> messageSentFilter(f)}
+*/
+
+// invariant onlyBridgeMintBurnStaticATokens(e)
+
+// invariant onlyApprovedTokenFunctionChangeATokenData()
+
+// rule multipleWithdrawReplayAttack(){}
+
+// rule integrityComputeRewardsDiff(){}
+

@@ -15,37 +15,47 @@ contract BridgeHarness is Bridge {
      *        Getters        *
      *************************/
 
-    function withdrawMessageStatus() external view returns (bool){
+    function withdrawMessageStatus() external view returns (bool) {
         return withdrawMessageSent;
     }
 
-    function bridgeRewardsMessageStatus() external view returns (bool){
+    function bridgeRewardsMessageStatus() external view returns (bool) {
         return bridgeRewardsMessageSent;
     }
 
     // Retrieving the UnderlyingAsset of the AToken
     function getUnderlyingAssetOfAToken(address AToken)
-    public view returns (IERC20 underlyingAsset) {
+        public
+        view
+        returns (IERC20 underlyingAsset)
+    {
         return _aTokenData[AToken].underlyingAsset;
     }
-    
-     /**
+
+    /**
      * @dev Retrieving the AToken address of an underlying asset
      * @param lendPool lending pool to search the AToken for.
      * @param asset The underlying asset to which the Atoken is connected
      * @return Atoken the `atoken` address
      **/
-    function getATokenOfUnderlyingAsset(SymbolicLendingPoolL1 lendPool, address asset)
-    public view returns (address)
-    {
+    function getATokenOfUnderlyingAsset(
+        SymbolicLendingPoolL1 lendPool,
+        address asset
+    ) public view returns (address) {
         return lendPool.underlyingtoAToken(asset);
     }
 
     // Retrieving the LendingPool of the AToken
     function getLendingPoolOfAToken(address AToken)
-    public view returns (ILendingPool lendingPool)
+        public
+        view
+        returns (ILendingPool lendingPool)
     {
         return _aTokenData[AToken].lendingPool;
+    }
+
+    function getRewardToken() public view returns (address) {
+        return address(_rewardToken);
     }
 
     // Retrieving the balance of a user with respect to a given token
@@ -56,6 +66,15 @@ contract BridgeHarness is Bridge {
     {
         return token.balanceOf(user);
     }
+
+    // Retrieving the balance of this with respect to a given token
+    function tokenBalanceOf(IERC20 token) public view returns (uint256) {
+        return token.balanceOf(address(this));
+    }
+
+    /*function getApprovedL1TokensLength() external view returns(uint256 length) {
+        length = _approvedL1Tokens.length;
+    }*/
 
     /************************
      *       Wrappers       *
@@ -95,7 +114,8 @@ contract BridgeHarness is Bridge {
         uint256 l2RewardsIndex,
         uint256 l1RewardsIndex
     ) external pure returns (uint256) {
-        return super._computeRewardsDiff(amount, l2RewardsIndex, l1RewardsIndex);
+        return
+            super._computeRewardsDiff(amount, l2RewardsIndex, l1RewardsIndex);
     }
 
     /*****************************************
@@ -157,13 +177,22 @@ contract BridgeHarness is Bridge {
     ) external returns (uint256) {
         require(!withdrawMessageSent, "A message is already being consumed");
         withdrawMessageSent = true;
-        BRIDGE_L2.initiateWithdraw(asset, amount, msg.sender, to, toUnderlyingAsset);
+        BRIDGE_L2.initiateWithdraw(
+            asset,
+            amount,
+            msg.sender,
+            to,
+            toUnderlyingAsset
+        );
         withdrawMessageSent = false;
         return amount;
     }
 
     function bridgeRewards_L2(address recipient, uint256 amount) external {
-        require(!bridgeRewardsMessageSent, "A message is already being consumed");
+        require(
+            !bridgeRewardsMessageSent,
+            "A message is already being consumed"
+        );
         bridgeRewardsMessageSent = true;
         BRIDGE_L2.bridgeRewards(recipient, msg.sender, amount);
         bridgeRewardsMessageSent = false;
@@ -171,5 +200,5 @@ contract BridgeHarness is Bridge {
 
     function claimRewardsStatic_L2(address staticAToken) external {
         BRIDGE_L2.claimRewards(msg.sender, staticAToken);
-    }    
+    }
 }
