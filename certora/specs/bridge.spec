@@ -48,7 +48,7 @@ methods {
     // Note that these methods take as args OR return the contract types that are written in comment to their right.
     // In CVL we contracts are addresses an therefore we demand return of an address
     getRewardToken() returns (address) envfree
-    // getApprovedL1TokensLength() returns (uint256)
+    getApprovedL1TokensLength() returns (uint256) envfree
     getATokenOfUnderlyingAsset(address, address) returns (address) envfree
     getLendingPoolOfAToken(address) returns (address) envfree //(ILendingPool)
     _staticToDynamicAmount_Wrapper(uint256, address, address) envfree //(ILendingPool)
@@ -169,6 +169,9 @@ definition messageSentFilter(method f) returns bool =
 definition initializeFilter(method f) returns bool =
     f.selector == 
     initialize(uint256, address, address, address[], uint256[]).selector; 
+
+definition MAX_ARRAY_LENGTH() returns uint256 = 10^18;
+
 
 ////////////////////////////////////////////////////////////////////////////
 //                       Rules                                            //
@@ -590,7 +593,7 @@ function rayDivConst(uint256 a, uint256 b) returns uint256
 ////////////////////////////////////////////////////////////////////////////
 //                 Added Functions/Rules/Invariants/Etc                   //
 ////////////////////////////////////////////////////////////////////////////
-/*
+
 // Checks basic properties of claim rewards in L2 and bridge to L1
 rule integrityOfBridgingRewards(address recipient){
     env e;
@@ -770,28 +773,120 @@ filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
     assert supplyATokenAfter >= supplyStaticATokenAfter;
 }
 
+//Total of l2TokenAddresses
 ghost mathint totalApprovedTokens {
     init_state axiom totalApprovedTokens == 0;
 }
 
-hook Sstore _aTokenData[KEY address token].l2TokenAddress uint256 tokenAddress
+// When change l2TokenAddress
+hook Sstore _aTokenData[KEY address token].l2TokenAddress uint256 new_tokenAddress
     (uint256 old_tokenAddress) STORAGE {
-        // When is adding a new l2TokenAddress to ATokenData
-        if(old_tokenAddress == 0 && tokenAddress != 0){
-            totalApprovedTokens = totalApprovedTokens + 1;
-        }
+
+        totalApprovedTokens = totalApprovedTokens + 1;
 }
 
-invariant integrityApprovedTokensAndTokenData(env e)
-    totalApprovedTokens == getApprovedL1TokensLength(e)
-    filtered{f -> messageSentFilter(f)}
-*/
+// Check integrity of _approvedL1Tokens array lenght and totalApprovedTokens change
+// excluding initialize
+invariant integrityApprovedTokensAndTokenData()
+    totalApprovedTokens == getApprovedL1TokensLength()
+    filtered{f -> messageSentFilter(f) && excludeInitialize(f)}
 
-// invariant onlyBridgeMintBurnStaticATokens(e)
 
-// invariant onlyApprovedTokenFunctionChangeATokenData()
+// Verify if initialize check for invalid array of l1Tokens and l2Tokens.
+// In this case, both l1Tokens point to same l2Token :
+// L1TokenA => L2Token
+// L1TokenB => L2Token
+// Issue: There isn't a check for this case, and this rule will fail
+rule shouldFailInvalidTokenArray(address AToken, address asset){
+    env e;
+    uint256 l2Bridge;
+    address msg;
+    address controller;
+    address l1TokensA;
+    address l1TokensB;
+    uint256 l2Token;
 
-// rule multipleWithdrawReplayAttack(){}
+    // Post-constructor conditions
+    require getUnderlyingAssetHelper(AToken) == 0;
+    require getATokenOfUnderlyingAsset(LENDINGPOOL_L1, asset) == 0;
+    require getL2TokenAddress(e,l1TokenA) == 0 
+        && getL2TokenAddress(e,l1TokenB) == 0;
 
-// rule integrityComputeRewardsDiff(){}
+    //This should fail because of invalid l2token array
+    initialize@withrevert(e, l2Bridge, msg, controller, [l1TokensA, l1TokensB], [l2Token,l2Token]);
 
+    assert lastReverted;
+}
+
+// Verify if initialize check for zero length array of l1Tokens and l2Tokens.
+// Issue: There isn't a check for this case, and this rule will fail.
+rule shouldFailZeroTokenArray(address AToken, address asset){
+    env e;
+    uint256 l2Bridge;
+    address msg;
+    address controller;
+    address[] addr = [];
+
+    // Post-constructor conditions
+    require getUnderlyingAssetHelper(AToken) == 0;
+    require getATokenOfUnderlyingAsset(LENDINGPOOL_L1, asset) == 0;
+    
+    //This should fail because of invalid l2token array
+    initialize@withrevert(e, l2Bridge, msg, controller, addr, addr);
+
+    assert lastReverted;
+}
+
+// Verify if only initialize function can change approved tokens
+rule onlyInitializeChangeApprovedTokens(method f) 
+filtered{f -> messageSentFilter(f)} {
+    env e;    
+    address asset;
+    address AToken;
+    address static;
+    address recipient;
+    bool fromToUA;
+    uint256 amount;
+    
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+
+    uint256 lengthBefore = getApprovedL1TokensLength();
+
+    // Call any interface function 
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
+
+    uint256 lengthAfter = getApprovedL1TokensLength();
+
+    require lengthAfter != lengthBefore;
+    assert f.selector == initialize(uint256, address, address, address[], uint256[]).selector;
+}
+
+// Only deposit can increase amount of static and only withdraw can decrease the amount of static
+rule integrityStaticTokenBalance(method f) 
+filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
+    env e;    
+    address asset;
+    address AToken;
+    address static;
+    address recipient;
+    bool fromToUA;
+    uint256 amount;
+    
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+
+    uint256 balanceStaticBefore = tokenBalanceOf(e, static, recipient);
+
+    // Call any interface function 
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
+
+    uint256 balanceStaticAfter = tokenBalanceOf(e, static, recipient);
+
+    bool balancesChanged = !(balanceStaticAfter == balanceStaticBefore);
+
+    assert balancesChanged =>
+            (f.selector == deposit(address, uint256, uint256, uint16, bool).selector 
+            ||
+            f.selector == initiateWithdraw_L2(address, uint256, address, bool).selector);
+}

@@ -72,9 +72,13 @@ contract BridgeHarness is Bridge {
         return token.balanceOf(address(this));
     }
 
-    /*function getApprovedL1TokensLength() external view returns(uint256 length) {
+    function getApprovedL1TokensLength()
+        external
+        view
+        returns (uint256 length)
+    {
         length = _approvedL1Tokens.length;
-    }*/
+    }
 
     /************************
      *       Wrappers       *

@@ -30,8 +30,6 @@ certoraRun certora/harness/BridgeHarness.sol \
         --optimistic_loop \
         --loop_iter 3 \
         --send_only \
-        --rule sanity \
-        --rule_sanity \
         --cloud \
         --msg "AAVE S-Net Bridge"
 
