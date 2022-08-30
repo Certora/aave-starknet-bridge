@@ -50,6 +50,7 @@ methods {
     getRewardToken() returns (address) envfree
     getApprovedL1TokensLength() returns (uint256) envfree
     getATokenOfUnderlyingAsset(address, address) returns (address) envfree
+    getL2TokenOfAToken(address) returns (uint256) envfree
     getLendingPoolOfAToken(address) returns (address) envfree //(ILendingPool)
     _staticToDynamicAmount_Wrapper(uint256, address, address) envfree //(ILendingPool)
     _dynamicToStaticAmount_Wrapper(uint256, address, address) envfree //(ILendingPool)
@@ -170,7 +171,7 @@ definition initializeFilter(method f) returns bool =
     f.selector == 
     initialize(uint256, address, address, address[], uint256[]).selector; 
 
-definition MAX_ARRAY_LENGTH() returns uint256 = 10^18;
+definition MAX_ARRAY_LENGTH() returns uint256 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF;
 
 
 ////////////////////////////////////////////////////////////////////////////
@@ -773,70 +774,6 @@ filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
     assert supplyATokenAfter >= supplyStaticATokenAfter;
 }
 
-//Total of l2TokenAddresses
-ghost mathint totalApprovedTokens {
-    init_state axiom totalApprovedTokens == 0;
-}
-
-// When change l2TokenAddress
-hook Sstore _aTokenData[KEY address token].l2TokenAddress uint256 new_tokenAddress
-    (uint256 old_tokenAddress) STORAGE {
-
-        totalApprovedTokens = totalApprovedTokens + 1;
-}
-
-// Check integrity of _approvedL1Tokens array lenght and totalApprovedTokens change
-// excluding initialize
-invariant integrityApprovedTokensAndTokenData()
-    totalApprovedTokens == getApprovedL1TokensLength()
-    filtered{f -> messageSentFilter(f) && excludeInitialize(f)}
-
-
-// Verify if initialize check for invalid array of l1Tokens and l2Tokens.
-// In this case, both l1Tokens point to same l2Token :
-// L1TokenA => L2Token
-// L1TokenB => L2Token
-// Issue: There isn't a check for this case, and this rule will fail
-rule shouldFailInvalidTokenArray(address AToken, address asset){
-    env e;
-    uint256 l2Bridge;
-    address msg;
-    address controller;
-    address l1TokensA;
-    address l1TokensB;
-    uint256 l2Token;
-
-    // Post-constructor conditions
-    require getUnderlyingAssetHelper(AToken) == 0;
-    require getATokenOfUnderlyingAsset(LENDINGPOOL_L1, asset) == 0;
-    require getL2TokenAddress(e,l1TokenA) == 0 
-        && getL2TokenAddress(e,l1TokenB) == 0;
-
-    //This should fail because of invalid l2token array
-    initialize@withrevert(e, l2Bridge, msg, controller, [l1TokensA, l1TokensB], [l2Token,l2Token]);
-
-    assert lastReverted;
-}
-
-// Verify if initialize check for zero length array of l1Tokens and l2Tokens.
-// Issue: There isn't a check for this case, and this rule will fail.
-rule shouldFailZeroTokenArray(address AToken, address asset){
-    env e;
-    uint256 l2Bridge;
-    address msg;
-    address controller;
-    address[] addr = [];
-
-    // Post-constructor conditions
-    require getUnderlyingAssetHelper(AToken) == 0;
-    require getATokenOfUnderlyingAsset(LENDINGPOOL_L1, asset) == 0;
-    
-    //This should fail because of invalid l2token array
-    initialize@withrevert(e, l2Bridge, msg, controller, addr, addr);
-
-    assert lastReverted;
-}
-
 // Verify if only initialize function can change approved tokens
 rule onlyInitializeChangeApprovedTokens(method f) 
 filtered{f -> messageSentFilter(f)} {
@@ -890,3 +827,70 @@ filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
             ||
             f.selector == initiateWithdraw_L2(address, uint256, address, bool).selector);
 }
+
+// Verify if initialize check for invalid array of l1Tokens and l2Tokens.
+// In this case, both l1Tokens point to same l2Token :
+// L1TokenA => L2Token
+// L1TokenB => L2Token
+// Issue: There isn't a check for this case, and this rule will fail
+rule shouldFailInvalidTokenArray(address AToken, address asset){
+    env e;
+    uint256 l2Bridge;
+    address msg;
+    address controller;
+    address l1TokenA;
+    address l1TokenB;
+    uint256 l2Token;
+
+    // Post-constructor conditions
+    require getUnderlyingAssetHelper(AToken) == 0;
+    require getATokenOfUnderlyingAsset(LENDINGPOOL_L1, asset) == 0;
+    require getL2TokenOfAToken(l1TokenA) == 0 
+        && getL2TokenOfAToken(l1TokenB) == 0;
+
+    //This should fail because of invalid l2token array
+    initialize@withrevert(e, l2Bridge, msg, controller, [l1TokenA, l1TokenB], [l2Token,l2Token]);
+
+    assert lastReverted;
+}
+
+// Verify if initialize check for zero length array of l1Tokens and l2Tokens.
+// Issue: There isn't a check for this case, and this rule will fail.
+rule shouldFailZeroTokenArray(address AToken, address asset){
+    env e;
+    uint256 l2Bridge;
+    address msg;
+    address controller;
+    address[] addr = [];
+
+    // Post-constructor conditions
+    require getUnderlyingAssetHelper(AToken) == 0;
+    require getATokenOfUnderlyingAsset(LENDINGPOOL_L1, asset) == 0;
+    
+    //This should fail because of invalid l2token array
+    initialize@withrevert(e, l2Bridge, msg, controller, addr, addr);
+
+    assert lastReverted;
+}
+
+//Total of l2TokenAddresses
+ghost mathint totalApprovedTokens {
+    init_state axiom totalApprovedTokens == 0;
+}
+
+// When change l2TokenAddress
+hook Sstore _aTokenData[KEY address token].l2TokenAddress uint256 new_tokenAddress
+    (uint256 old_tokenAddress) STORAGE {
+        totalApprovedTokens = totalApprovedTokens + 1;
+}
+
+// Check integrity of _approvedL1Tokens array lenght and totalApprovedTokens change
+// excluding initialize
+invariant integrityApprovedTokensAndTokenData()
+    totalApprovedTokens == getApprovedL1TokensLength()
+    filtered{f -> messageSentFilter(f) }
+    { preserved { 
+        // Avoiding overflow
+        require getApprovedL1TokensLength() < MAX_ARRAY_LENGTH(); 
+    } }
+

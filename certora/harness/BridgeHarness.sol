@@ -32,6 +32,11 @@ contract BridgeHarness is Bridge {
         return _aTokenData[AToken].underlyingAsset;
     }
 
+    // Retrieving the UnderlyingAsset of the AToken
+    function getL2TokenOfAToken(address AToken) public view returns (uint256) {
+        return _aTokenData[AToken].l2TokenAddress;
+    }
+
     /**
      * @dev Retrieving the AToken address of an underlying asset
      * @param lendPool lending pool to search the AToken for.
