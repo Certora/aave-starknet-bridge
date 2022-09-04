@@ -725,8 +725,9 @@ filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
     assert l1IndexAfter >= l2IndexAfter;
 }
 
-// Supply of Static AToken should not be more than AToken supply
-rule checkSupplyStaticATokenToAToken(method f) 
+// Total supply of Static AToken should not be more than AToken total supply
+//Issue: Precision loss on withdraw
+rule checkSupplyStaticTokenToAToken(method f) 
 filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
     env e;    
     address asset;
@@ -738,19 +739,25 @@ filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
     
     setupTokens(asset, AToken, static);
     setupUser(e.msg.sender);
-
+    
     uint256 supplyStaticATokenBefore = STATIC_ATOKEN_A.totalSupply();
-    uint256 supplyATokenBefore = ATOKEN_A.balanceOf_super(e.msg.sender);
+    uint256 balanceATokenBefore = tokenBalanceOf(e, AToken);
 
-    require supplyATokenBefore >= supplyStaticATokenBefore;
+    uint256 supplyBefore = _staticToDynamicAmount_Wrapper(supplyStaticATokenBefore, asset, LENDINGPOOL_L1);
+
+
+    require static == STATIC_ATOKEN_A;
+    require supplyBefore <= balanceATokenBefore;
 
     // Call any interface function 
     callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
 
     uint256 supplyStaticATokenAfter = STATIC_ATOKEN_A.totalSupply();
-    uint256 supplyATokenAfter = ATOKEN_A.balanceOf_super(e.msg.sender);
+    uint256 balanceATokenAfter = tokenBalanceOf(e, AToken);
 
-    assert supplyATokenAfter >= supplyStaticATokenAfter;
+    uint256 supplyAfter = _staticToDynamicAmount_Wrapper(supplyStaticATokenAfter, asset, LENDINGPOOL_L1);
+
+    assert supplyAfter <= balanceATokenAfter;
 }
 
 // Verify if only initialize function can change approved tokens
