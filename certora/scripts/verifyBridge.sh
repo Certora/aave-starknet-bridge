@@ -21,11 +21,10 @@ certoraRun certora/harness/BridgeHarness.sol \
                     ATokenWithPoolB_L1:_incentivesController=IncentivesControllerMock_L1 \
                     BridgeL2Harness:BRIDGE_L1=BridgeHarness \
                     BridgeL2Harness:REW_AAVE=DummyERC20RewardToken \
-        --solc solc8.10 \
+        --solc solc810 \
         --optimistic_loop \
         --loop_iter 3 \
         --send_only \
-        --rule sanity \
         --rule_sanity \
         --cloud \
         --msg "AAVE S-Net"
