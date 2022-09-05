@@ -124,6 +124,7 @@ methods {
  // See also notes at bottom of file (under "Summarizations")
  // Comment out the next two lines to remove the simplification,
  // and let the prover use the original library functions.
+ 
     rayMul(uint256 a, uint256 b) returns (uint256) => rayMulConst(a, b)
     rayDiv(uint256 a, uint256 b) returns (uint256) => rayDivConst(a, b)
 }
@@ -398,6 +399,228 @@ rule sanity(method f) {
     callFunctionSetParams(f, e, receiver, aToken, asset, amount, fromToUnderlyingAsset);
     assert false;
 }
+
+
+rule depositIntegrity() {
+    env e;
+    address user;
+    address Atoken; // AAVE Token
+    address asset;  // underlying asset
+    address static; // staticAToken
+    uint256 l2Recipient = BRIDGE_L2.address2uint256(user);
+    uint16 referralCode;
+    bool fromUA; // (deposit) from underlying asset
+
+    
+    uint256 dynAmount; // amount of Atoken/asset tokens to deposit
+    uint256 statAmount = _dynamicToStaticAmount_Wrapper(dynAmount, asset, LENDINGPOOL_L1);
+    uint256 indexL1 = LENDINGPOOL_L1.liquidityIndexByAsset(asset);
+
+    setupTokens(asset, Atoken, static);
+    setupUser(user);
+    requireRayIndex(asset);
+    require user == e.msg.sender;
+
+
+    uint256 userBalanceU1 = tokenBalanceOf(e, asset, user);
+    uint256 userBalanceA1 = tokenBalanceOf(e, Atoken, user);
+    uint256 userBalanceS1 = tokenBalanceOf(e, static, user);
+
+    uint256 bridgeBalanceU1 = tokenBalanceOf(e, asset, Bridge);
+    uint256 bridgeBalanceA1 = tokenBalanceOf(e, Atoken, Bridge);
+    uint256 bridgeBalanceS1 = tokenBalanceOf(e, static, Bridge);
+
+    uint256 ATokenBalanceU1 = tokenBalanceOf(e, asset, Atoken);
+
+
+    uint256 depositAmount = deposit(e, Atoken, l2Recipient, dynAmount, referralCode, fromUA);
+
+    uint256 userBalanceU2 = tokenBalanceOf(e, asset, user);
+    uint256 userBalanceA2 = tokenBalanceOf(e, Atoken, user);
+    uint256 userBalanceS2 = tokenBalanceOf(e, static, user);
+
+    uint256 bridgeBalanceU2 = tokenBalanceOf(e, asset, Bridge);
+    uint256 bridgeBalanceA2 = tokenBalanceOf(e, Atoken, Bridge);
+    uint256 bridgeBalanceS2 = tokenBalanceOf(e, static, Bridge);
+
+    uint256 ATokenBalanceU2 = tokenBalanceOf(e, asset, Atoken);
+
+
+    assert depositAmount == statAmount;
+    
+    //if we're depositing underlying asset
+    assert fromUA => 
+        userBalanceU2   == userBalanceU1 - dynAmount && //user's underlying asset amount decreases
+        ATokenBalanceU2 == ATokenBalanceU1 + dynAmount && //L1 aTokens are minted and aToken address is holding the underlying assets
+        bridgeBalanceA2 - (bridgeBalanceA1 + dynAmount) <= (indexL1/RAY() + 1)/2 && //L1 aTokens are held by the L1 bridge contract
+        userBalanceS2   == userBalanceS1 + statAmount && //static aTokens on L2 are received by the user
+        userBalanceA2   == userBalanceA1 && //nothing should change here
+        bridgeBalanceU2 == bridgeBalanceU1 && //nothing should change here
+        bridgeBalanceS2 == bridgeBalanceS1; //nothing should change here
+
+    //if we're depositing aTokens
+     assert !fromUA =>
+        userBalanceA2   - (userBalanceA1 + dynAmount) <= (indexL1/RAY() + 1)/2 && //user's amount of aTokens amount decreases
+        bridgeBalanceA2 - (bridgeBalanceA1 + dynAmount) <= (indexL1/RAY() + 1)/2 && //L1 aTokens are send to the L1 bridge contract
+        userBalanceS2   == userBalanceS1 + statAmount && //static aTokens on L2 are received by the user
+        userBalanceU2   == userBalanceU1 && //nothing should change here
+        bridgeBalanceU2 == bridgeBalanceU1 && //nothing should change here
+        bridgeBalanceS2 == bridgeBalanceS1 && //nothing should change here
+        ATokenBalanceU2 == ATokenBalanceU1; //nothing should change here
+}
+
+
+rule depositUA_EQ_depositAToken() {
+    env e;
+    address user;
+    uint256 amount;
+    address Atoken; // AAVE Token
+    address asset;  // underlying asset
+    address static; // staticAToken
+    uint256 l2Recipient = BRIDGE_L2.address2uint256(user);
+    uint16 referralCode;
+
+    setupTokens(asset, Atoken, static);
+    setupUser(user);
+    requireRayIndex(asset);
+    require user == e.msg.sender;
+
+    storage initial = lastStorage;
+
+    // depositing underlying asset
+    deposit(e, Atoken, l2Recipient, amount, referralCode, true) at initial;
+
+    uint256 bridgeBalanceA_depositUA = tokenBalanceOf(e, Atoken, Bridge);
+    uint256 userBalanceS_depositUA   = tokenBalanceOf(e, static, user);
+
+    // depositing aTokens
+    deposit(e, Atoken, l2Recipient, amount, referralCode, false) at initial;
+
+    uint256 bridgeBalanceA_depositAToken = tokenBalanceOf(e, Atoken, Bridge);
+    uint256 userBalanceS_depositAToken   = tokenBalanceOf(e, static, user);
+
+    /*
+        No matter when depositing UL or aTokens:
+            1. The new amount of aTokens of the L1 bridge should be the same
+            2. The new amount of static aTokens on L2 side linked to the user should be the same
+    */
+    assert 
+        bridgeBalanceA_depositUA == bridgeBalanceA_depositAToken &&
+        userBalanceS_depositUA == userBalanceS_depositAToken;
+}
+
+rule withdrawRewardsFromL2Integrity() {
+    env e;
+    address user;
+    address userRewardAddress;
+    uint256 amount;
+    address Atoken; // AAVE Token
+    address asset;  // underlying asset
+    address static; // staticAToken
+
+    setupTokens(asset, Atoken, static);
+    setupUser(user);
+    setupUser(userRewardAddress);
+    requireRayIndex(asset);
+    require user == e.msg.sender;
+    require user != userRewardAddress;
+
+
+    uint256 rewardsL1Before = tokenBalanceOf(e, REWARD_TOKEN, userRewardAddress);
+    uint256 rewardsL2Before = tokenBalanceOf(e, REWARD_TOKEN, user);
+
+    // bridging rewards from L2 to L1
+    bridgeRewards_L2(e, userRewardAddress, amount);
+
+    uint256 rewardsL1After = tokenBalanceOf(e, REWARD_TOKEN, userRewardAddress);
+    uint256 rewardsL2After = tokenBalanceOf(e, REWARD_TOKEN, user);
+
+    assert rewardsL2After == rewardsL2Before - amount;
+
+    assert rewardsL1After == rewardsL1Before + amount;
+}
+
+
+rule cantExtractAssetsFromL1WhenNoAssetsOnL2(method f) 
+    filtered {   f -> messageSentFilter(f) &&
+                 f.selector != deposit(address, uint256, uint256, uint16, bool).selector  
+    } {
+    
+    env e;  
+    address user;
+    uint256 amount;
+    address asset;
+    address Atoken;
+    address static;
+    bool fromToUA;
+    
+    setupTokens(asset, Atoken, static);
+    setupUser(user);
+    require user == e.msg.sender;
+    
+
+    uint256 userBalanceU1 = tokenBalanceOf(e, asset, user);
+    uint256 userBalanceA1 = tokenBalanceOf(e, Atoken, user);
+    uint256 userBalanceS1 = tokenBalanceOf(e, static, user);
+
+    callFunctionSetParams(f, e, user, Atoken, asset, amount, fromToUA);
+
+    uint256 userBalanceU2 = tokenBalanceOf(e, asset, user);
+    uint256 userBalanceA2 = tokenBalanceOf(e, Atoken, user);
+    uint256 userBalanceS2 = tokenBalanceOf(e, static, user);
+
+    /*
+        If the user has no static tokens on L2, no function can alter the
+            1. amount of underlying assets on L1
+            2. amount of aTokens on L1
+    */
+    assert (userBalanceS1 == 0) =>
+        userBalanceU1 == userBalanceU2 &&
+        userBalanceA1 == userBalanceA2;
+        
+}
+
+
+rule balanceStaticATokenOnlyChangesUponDepositOrWithdraw(method f) 
+    filtered { f -> messageSentFilter(f) } {
+    
+    env e;  
+    address user;
+    uint256 amount;
+    address asset;
+    address Atoken;
+    address static;
+    bool fromToUA;
+    
+    setupTokens(asset, Atoken, static);
+    setupUser(user);
+    require user == e.msg.sender;
+    require amount != 0;
+    
+
+    uint256 userBalanceS1 = tokenBalanceOf(e, static, user);
+
+    callFunctionSetParams(f, e, user, Atoken, asset, amount, fromToUA);
+
+    uint256 userBalanceS2 = tokenBalanceOf(e, static, user);
+
+    /*
+        If the amount of static tokens on L2 of a specific user...
+            1. ... increases, the deposit function should have been called
+            2. ... decreases, the withdraw function on L2 should have been called
+    */
+
+    assert userBalanceS1 < userBalanceS2 <=> 
+        f.selector == deposit(address, uint256, uint256, uint16, bool).selector;
+    
+    assert userBalanceS1 > userBalanceS2 <=> 
+        f.selector == initiateWithdraw_L2(address, uint256, address, bool).selector;
+}
+
+
+
+
+
 
 ////////////////////////////////////////////////////////////////////////////
 //                       Functions                                        //
