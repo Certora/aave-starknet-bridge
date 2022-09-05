@@ -185,6 +185,10 @@ definition messageSentFilter(method f) returns bool =
         Link to last verification report run of the rule.
 */
 
+/*
+    @Link: https://prover.certora.com/output/93750/92fe288171e2f35af41a?anonymousKey=a069a02a29d863cf565d8cee7f8a5956e86a0c27
+*/
+
 // Checks basic properties of withdrawal.
 rule integrityOfWithdraw(address recipient){
     bool toUnderlyingAsset;
@@ -399,6 +403,430 @@ rule sanity(method f) {
     assert false;
 }
 
+/////////////////////////
+    // My rules
+////////////////////////
+
+
+// 1. // correctly update static balance
+rule checkStaticATokenBalance(address recipient){
+     bool toUnderlyingAsset;
+    uint256 staticAmount; 
+    env e; calldataarg args;
+    address underlying;
+    address static;
+    address aToken;
+    uint256 l2RewardsIndex = BRIDGE_L2.l2RewardsIndex();
+    
+    setupTokens(underlying, aToken, static);
+    setupUser(e.msg.sender);
+    require recipient != aToken;
+    require recipient != currentContract;
+
+    uint256 _staticBalance= getStaticATokenBalance(e,aToken,e.msg.sender);
+    uint256 _recepientAtokenBalance = tokenBalanceOf(e,aToken , recipient);
+    uint256 _recepientAssetBalance = tokenBalanceOf(e,underlying , recipient);
+
+    initiateWithdraw_L2(e, aToken, staticAmount, recipient, toUnderlyingAsset);
+  
+    uint256 staticBalance_= getStaticATokenBalance(e,aToken,e.msg.sender);
+    uint256 recepientAtokenBalance_ = tokenBalanceOf(e,aToken , recipient);
+    uint256 recepientAssetBalance_ = tokenBalanceOf(e,underlying , recipient);
+
+    assert _staticBalance==staticBalance_+staticAmount;
+    assert toUnderlyingAsset => (recepientAssetBalance_ == _recepientAssetBalance + _staticToDynamicAmount_Wrapper(staticAmount,aToken,LENDINGPOOL_L1));
+    assert !toUnderlyingAsset => (recepientAtokenBalance_ == _recepientAtokenBalance + _staticToDynamicAmount_Wrapper(staticAmount,aToken,LENDINGPOOL_L1));
+}
+
+
+// 2. Cannot initialize agiain if already initialized
+// NOTE :- Make initializing variable public to run this rule
+rule cannotReInitialize{
+    env e; calldataarg args;
+    address underlying;
+    address static;
+    address aToken;
+    uint256 l2RewardsIndex = BRIDGE_L2.l2RewardsIndex();
+    
+    setupTokens(underlying, aToken, static);
+    setupUser(e.msg.sender);
+
+    require(initializing(e)==false);
+
+    initialize(e,args);
+
+    initialize@withrevert(e,args);
+
+    assert lastReverted==true,"initializing second time should revert";
+}
+
+// 3. Cannot change _messagingContract , _l2Bridge , _rewardToken , _incentivesController if set once
+rule cannotChangeOnceSet(method f,env e,calldataarg args) filtered{f -> messageSentFilter(f) && excludeInitialize(f)}{
+
+    address _messagingContract=_messagingContract(e);
+    uint256 _l2Bridge=_l2Bridge(e);
+    address _rewardToken=_rewardToken();
+    address _incentivesController = _incentivesController(e);
+
+    f(e,args);
+
+    address messagingContract_=_messagingContract(e);
+    uint256 l2Bridge_=_l2Bridge(e);
+    address rewardToken_=_rewardToken();
+    address incentivesController_ = _incentivesController(e);
+
+    assert _messagingContract == messagingContract_;
+    assert _l2Bridge==l2Bridge_;
+    assert _rewardToken == rewardToken_;
+    assert _incentivesController == incentivesController_;
+}
+
+
+// 4. Only owner can decrease his underlying , aToken , static balance
+rule onlyUserCanDecreaseHisBalance(method f) filtered{f -> messageSentFilter(f)}{
+    env e;calldataarg args;    
+    address asset;
+    address AToken;
+    address static;
+    address user;
+    bool fromToUA;
+    
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+    requireValidUser(user);
+
+    uint256 _balanceU1=tokenBalanceOf(e, asset, user);
+    uint256 _balanceA1=tokenBalanceOf(e,AToken,user);
+    uint256 _balanceS1=tokenBalanceOf(e,static,user);
+
+    f(e,args);
+
+    uint256 balanceU1_=tokenBalanceOf(e, asset, user);
+    uint256 balanceA1_=tokenBalanceOf(e,AToken,user);
+    uint256 balanceS1_=tokenBalanceOf(e,static,user);
+
+    bool balanceDecreased= (_balanceU1 > balanceU1_ || _balanceA1 > balanceA1_ || _balanceS1 > balanceS1_);
+    // assert balanceU1_ < _balanceU1 => e.msg.sender==user;
+    // assert balanceA1_ < _balanceA1 => e.msg.sender==user;
+    // assert balanceS1_ < _balanceS1 => e.msg.sender==user;
+    assert balanceDecreased==true => e.msg.sender==user;
+}
+
+
+ghost mathint totalApprovedTokens{
+    init_state axiom totalApprovedTokens==0;
+}
+
+hook Sstore _aTokenData[KEY address user].l2TokenAddress uint256 newL2Address (uint256 oldL2Address) STORAGE{
+    totalApprovedTokens=totalApprovedTokens+1;
+}
+// 5. check approvedTokenArray length
+invariant correctnessOfApprovedL1TokensArray(env e)
+    getApprovedTokensArrayLength(e)==totalApprovedTokens
+     { preserved initialize(uint256 l2Bridge,address messagingContract,address _incentivesController,address[] l1Tokens,uint256[] l2Tokens) with (env e2){
+        require(getApprovedTokensArrayLength(e) + l1Tokens.length <= max_uint);
+        }
+     }
+
+
+
+function nonZeroL2Address(address a,address b) returns bool{
+    env e;
+    bool res= (getL2TokenAddress(e,a)!=0 && getL2TokenAddress(e,b)!=0 ) ? true:false;
+    return res;
+}
+
+// 6. @Note: - this rule highlights a possibility/Bug of different l1Token having same corresponding l2Address.
+// THIS RULE FAILS.
+rule distinctL1TokenMustNotHaveSameL2Token{
+    address L1TokenA;address L1TokenB;
+    method f;env e;calldataarg args;
+    require(L1TokenA!=0 && L1TokenB!=0 && L1TokenA!=L1TokenB);
+    require(getL2TokenAddress(e,L1TokenA)==0 && getL2TokenAddress(e,L1TokenB)==0);
+
+    initialize(e,args);
+
+    assert nonZeroL2Address(L1TokenA,L1TokenB) == true => getL2TokenAddress(e,L1TokenA) != getL2TokenAddress(e,L1TokenB);
+    
+}
+
+// 7. Reward balance can only change in initiateWithdraw_L2 , bridgeRewards_L2 and claimRewards_L2
+rule rewardBalanceChangeRestriction(method f,env e,calldataarg args) filtered{f -> messageSentFilter(f)} {
+    requireValidUser(e.msg.sender);
+    address user;address asset;address Atoken;address static;address receiver;uint256 amount;bool fromUnderlyingAsset;
+    setupTokens(asset, Atoken, static);
+    uint256 _rewardBalance=getRewardBalance(e,user);
+    callFunctionSetParams(f,e,receiver,Atoken,asset,amount,fromUnderlyingAsset);
+    uint256 rewardBalance_=getRewardBalance(e,user);
+    assert _rewardBalance!=rewardBalance_ => f.selector == initiateWithdraw_L2(address,uint256,address,bool).selector || f.selector == bridgeRewards_L2(address,uint256).selector || f.selector == claimRewardsStatic_L2(address).selector;
+}
+
+// 8. Reward balance of a user cannot decrease i.e its only increasing in nature.
+rule rewardBalanceIsOnlyIncreasing(method f,env e,calldataarg args)filtered{f -> messageSentFilter(f) && f.selector != bridgeRewards_L2(address, uint256).selector}{
+    address user;address asset;address Atoken;address static;address receiver;uint256 amount;bool fromUnderlyingAsset;
+    setupTokens(asset, Atoken, static);
+    requireValidUser(user);
+    uint256 _rewardBalance = getRewardBalance(e,user);
+    callFunctionSetParams(f,e,receiver,Atoken,asset,amount,fromUnderlyingAsset);
+    uint256 rewardBalance_ = getRewardBalance(e,user);
+
+    assert rewardBalance_ >= _rewardBalance,"rewardBalance cannot be decreased";
+}
+
+//9 - Cannot claim rewards again with claimRewards_l2 if already claimed
+rule cannotClaimRewardsIfAlreadyClaimed(env e) {
+    address Atoken; address asset;address static; 
+
+    setupTokens(asset, Atoken, static);
+    requireValidUser(e.msg.sender);
+
+    claimRewardsStatic_L2(e, static);
+
+    claimRewardsStatic_L2@withrevert(e, static); // this will revert coz in dummyStaticAToken implementation unclaimedRewards[recepient] becomes 0 after first call.
+
+    assert lastReverted==true;
+}
+
+// 10. Zero address must have zero aToken balance.
+
+invariant zeroAddressATokenCheck(env e)
+    tokenBalanceOf(e,ATOKEN_A,0)==0
+
+// 11. zero address must have zero static balance
+
+invariant zeroAddressStaticBalanceCheck(env e)
+    tokenBalanceOf(e,STATIC_ATOKEN_A,0)==0
+
+//12 - Cannot withdraw in L2 if static balance is zero
+rule zeroStaticBalanceCannotWithdraw(env e) {
+    address recipient;address Atoken; address asset;  address static; uint256 amount; 
+    bool fromtoUnderlyingAsset; 
+
+    setupTokens(asset, Atoken, static);
+    requireValidUser(e.msg.sender);
+    require tokenBalanceOf(e, static, e.msg.sender) == 0;
+    require (recipient != Atoken && recipient != currentContract);
+
+    initiateWithdraw_L2@withrevert(e, Atoken, amount, recipient, fromtoUnderlyingAsset);
+
+    assert lastReverted==true;
+}
+
+//13. If static balance of a user decreases then his aToken or underlying asset balance must increase and vice versa.
+rule ifL1BalanceDecreaseL2BalanceIncreaseAndViceVersa(method f,env e,calldataarg args)filtered{f -> messageSentFilter(f) }{
+    address asset;address Atoken;address static;address receiver;uint256 amount;bool fromToUnderlyingAsset;
+    setupTokens(asset, Atoken, static);
+    requireValidUser(e.msg.sender);
+    require(receiver != ATOKEN_A && receiver != ATOKEN_B);  //receiver cannot be the pool itself
+
+    uint256 _assetBalanceReceiver=tokenBalanceOf(e,asset,receiver);
+    uint256 _ATokenBalanceReceiver=tokenBalanceOf(e,Atoken,receiver);
+    uint256 _assetBalanceCaller=tokenBalanceOf(e,asset,e.msg.sender);
+    uint256 _ATokenBalanceCaller=tokenBalanceOf(e,Atoken,e.msg.sender);
+    uint256 _staticBalanceReceiver=tokenBalanceOf(e,static,receiver);
+    uint256 _staticBalanceCaller=tokenBalanceOf(e,static,e.msg.sender);
+
+
+    callFunctionSetParams(f,e,receiver,Atoken,asset,amount,fromToUnderlyingAsset);
+
+    uint256 assetBalanceReceiver_=tokenBalanceOf(e,asset,receiver);
+    uint256 ATokenBalanceReceiver_=tokenBalanceOf(e,Atoken,receiver);
+    uint256 assetBalanceCaller_=tokenBalanceOf(e,asset,e.msg.sender);
+    uint256 ATokenBalanceCaller_=tokenBalanceOf(e,Atoken,e.msg.sender);
+    uint256 staticBalanceReceiver_=tokenBalanceOf(e,static,receiver);
+    uint256 staticBalanceCaller_=tokenBalanceOf(e,static,e.msg.sender);
+
+    assert (_assetBalanceCaller > assetBalanceCaller_ || _ATokenBalanceCaller >  ATokenBalanceCaller_) => _staticBalanceReceiver < staticBalanceReceiver_ ,"If balance of caller on L1 side decreases then balance of receiver on L2 side must increase";
+
+    assert (_staticBalanceCaller > staticBalanceCaller_) => (_assetBalanceReceiver < assetBalanceReceiver_ || _ATokenBalanceReceiver <  ATokenBalanceReceiver_) ,"If balance of caller on L2 side decreases then balance of receiver on L1 side must increase";
+}
+
+
+// 14. A third use balance must not change if deposit is called by another different address with recepient != user.
+rule checkEffectOnThirdParty_Deposit(method f,env e) filtered{f -> messageSentFilter(f) } {
+    address asset;address Atoken;address static;address user;
+    address receiver;uint256 amount;bool fromToUnderlyingAsset;uint16 referralCode;
+    setupTokens(asset, Atoken, static);
+
+    requireValidUser(receiver);
+    requireValidUser(e.msg.sender);
+    requireValidUser(user);
+    require(user!=e.msg.sender && user!= receiver);
+
+    uint256 _assetBalanceUser_original=tokenBalanceOf(e,asset,user);
+    uint256 _ATokenBalanceUser_original=tokenBalanceOf(e,Atoken,user);
+    uint256 _staticBalanceUser_original=tokenBalanceOf(e,static,user);
+    uint256 _rewardTokenBalanceUser_original=getRewardBalance(e,user);
+
+    uint256 receiver_uint=BRIDGE_L2.address2uint256(receiver);
+    storage initialstate = lastStorage;
+
+    deposit(e,Atoken,receiver_uint,amount,referralCode,fromToUnderlyingAsset);
+
+    uint256 assetBalanceUser_Deposit=tokenBalanceOf(e,asset,user);
+    uint256 ATokenBalanceUser_Deposit=tokenBalanceOf(e,Atoken,user);
+    uint256 staticBalanceUser_Deposit=tokenBalanceOf(e,static,user);
+    uint256 rewardTokenBalanceUser_Deposit=getRewardBalance(e,user);
+
+    assert _assetBalanceUser_original == assetBalanceUser_Deposit;
+    assert _ATokenBalanceUser_original == ATokenBalanceUser_Deposit;
+    assert _staticBalanceUser_original == staticBalanceUser_Deposit;
+    assert _rewardTokenBalanceUser_original == rewardTokenBalanceUser_Deposit;
+}
+
+// 15.A third use balance must not change if withdraw is called by another different address with recepient != user.
+rule checkEffectOnThirdParty_Withdraw(method f,env e)filtered{f -> messageSentFilter(f) }{
+    address asset;address Atoken;address static;address user;
+    address receiver;uint256 amount;bool fromToUnderlyingAsset;uint16 referralCode;
+    setupTokens(asset, Atoken, static);
+
+    requireValidUser(e.msg.sender);
+    requireValidUser(user);
+    require(user!=e.msg.sender && user!= receiver);
+
+    uint256 _assetBalanceUser_original=tokenBalanceOf(e,asset,user);
+    uint256 _ATokenBalanceUser_original=tokenBalanceOf(e,Atoken,user);
+    uint256 _staticBalanceUser_original=tokenBalanceOf(e,static,user);
+    uint256 _rewardTokenBalanceUser_original=getRewardBalance(e,user);
+
+    uint256 receiver_uint=BRIDGE_L2.address2uint256(receiver);
+
+    initiateWithdraw_L2(e,Atoken,amount,receiver,fromToUnderlyingAsset);
+
+    uint256 assetBalanceUser_Withdraw=tokenBalanceOf(e,asset,user);
+    uint256 ATokenBalanceUser_Withdraw=tokenBalanceOf(e,Atoken,user);
+    uint256 staticBalanceUser_Withdraw=tokenBalanceOf(e,static,user);
+    uint256 rewardTokenBalanceUser_Withdraw=getRewardBalance(e,user);
+
+    assert _assetBalanceUser_original == assetBalanceUser_Withdraw;
+    assert _ATokenBalanceUser_original == ATokenBalanceUser_Withdraw;
+    assert _staticBalanceUser_original == staticBalanceUser_Withdraw;
+    assert _rewardTokenBalanceUser_original == rewardTokenBalanceUser_Withdraw;
+}
+
+// 16.A third use balance must not change if claimRewards is called by another different address.
+rule checkEffectOnThirdParty_ClaimRewards(method f,env e)filtered{f -> messageSentFilter(f) }{
+     address asset;address Atoken;address static;address user;
+    address receiver;uint256 amount;bool fromToUnderlyingAsset;uint16 referralCode;
+    setupTokens(asset, Atoken, static);
+
+    // requireValidUser(receiver);
+    requireValidUser(e.msg.sender);
+    requireValidUser(user);
+    require(user!=e.msg.sender && user!= receiver);
+    uint256 receiver_uint=BRIDGE_L2.address2uint256(receiver);
+
+    uint256 _assetBalanceUser_original=tokenBalanceOf(e,asset,user);
+    uint256 _ATokenBalanceUser_original=tokenBalanceOf(e,Atoken,user);
+    uint256 _staticBalanceUser_original=tokenBalanceOf(e,static,user);
+    uint256 _rewardTokenBalanceUser_original=getRewardBalance(e,user);
+    
+    claimRewardsStatic_L2(e,static);
+
+    uint256 assetBalanceUser_ClaimRewards=tokenBalanceOf(e,asset,user);
+    uint256 ATokenBalanceUser_ClaimRewards=tokenBalanceOf(e,Atoken,user);
+    uint256 staticBalanceUser_ClaimRewards=tokenBalanceOf(e,static,user);
+    uint256 rewardTokenBalanceUser_ClaimRewards=getRewardBalance(e,user);
+
+    assert _assetBalanceUser_original == assetBalanceUser_ClaimRewards;
+    assert _ATokenBalanceUser_original == ATokenBalanceUser_ClaimRewards;
+    assert _staticBalanceUser_original == staticBalanceUser_ClaimRewards;
+    assert _rewardTokenBalanceUser_original == rewardTokenBalanceUser_ClaimRewards;
+
+}
+// 17. A third use balance must not change if bridgeRewards is called by another different address with recepient != user.
+rule checkEffectOnThirdParty_BridgeRewards(method f,env e)filtered{f -> messageSentFilter(f) }{
+     address asset;address Atoken;address static;address user;
+    address receiver;uint256 amount;bool fromToUnderlyingAsset;uint16 referralCode;
+    setupTokens(asset, Atoken, static);
+
+    // requireValidUser(receiver);
+    requireValidUser(e.msg.sender);
+    requireValidUser(user);
+    require(user!=e.msg.sender && user!= receiver);
+    uint256 receiver_uint=BRIDGE_L2.address2uint256(receiver);
+
+    uint256 _assetBalanceUser_original=tokenBalanceOf(e,asset,user);
+    uint256 _ATokenBalanceUser_original=tokenBalanceOf(e,Atoken,user);
+    uint256 _staticBalanceUser_original=tokenBalanceOf(e,static,user);
+    uint256 _rewardTokenBalanceUser_original=getRewardBalance(e,user);
+
+    bridgeRewards_L2(e,receiver,amount);
+
+    uint256 assetBalanceUser_BridgeRewards=tokenBalanceOf(e,asset,user);
+    uint256 ATokenBalanceUser_BridgeRewards=tokenBalanceOf(e,Atoken,user);
+    uint256 staticBalanceUser_BridgeRewards=tokenBalanceOf(e,static,user);
+    uint256 rewardTokenBalanceUser_BridgeRewards=getRewardBalance(e,user);
+
+    assert _assetBalanceUser_original == assetBalanceUser_BridgeRewards;
+    assert _ATokenBalanceUser_original == ATokenBalanceUser_BridgeRewards;
+    assert _staticBalanceUser_original == staticBalanceUser_BridgeRewards;
+    assert _rewardTokenBalanceUser_original == rewardTokenBalanceUser_BridgeRewards;
+}
+
+
+// 18. Sum of rewards balances of caller and reciver must not change before and after bridgeRewards.
+rule bridgeRewardsDoesNotChangeRewardBalanceSum(method f,env e)filtered{f -> messageSentFilter(f) }{
+          address asset;address Atoken;address static;
+    address receiver;uint256 amount;bool fromToUnderlyingAsset;uint16 referralCode;
+    setupTokens(asset, Atoken, static);
+
+    requireValidUser(e.msg.sender);
+
+    uint256 _callerRewardBalance = getRewardBalance(e,e.msg.sender);
+    uint256 _receiverRewardBalance = getRewardBalance(e,receiver);
+
+    bridgeRewards_L2(e,receiver,amount);
+
+    uint256 callerRewardBalance_ = getRewardBalance(e,e.msg.sender);
+    uint256 receiverRewardBalance_ = getRewardBalance(e,receiver);
+
+    assert _callerRewardBalance + _receiverRewardBalance == callerRewardBalance_ + receiverRewardBalance_;
+   
+}
+
+// 19. As more amount of static token withdraws , more the aToken balance or underlying balance of recepient becomes.
+rule monotonicIncreaseInWithdraw{
+    address asset;address Atoken;address static;
+    address receiver;uint256 amount1;uint256 amount2;bool fromToUnderlyingAsset;uint16 referralCode;env e;
+    setupTokens(asset, Atoken, static);
+
+    requireValidUser(e.msg.sender);
+    require(receiver != currentContract && receiver != Atoken);
+
+    storage initialState = lastStorage;
+
+    initiateWithdraw_L2(e,Atoken,amount1,receiver,fromToUnderlyingAsset);
+
+    uint256 aTokenBalance1_=  tokenBalanceOf(e,Atoken,receiver);
+    uint256 underlyingBalance1_=  tokenBalanceOf(e,asset,receiver);
+
+    // uint256 changeInBalance1 = aTokenBalance1_- _aTokenBalance;
+
+    initiateWithdraw_L2(e,Atoken,amount2,receiver,fromToUnderlyingAsset) at initialState;
+
+    uint256 aTokenBalance2_=  tokenBalanceOf(e,Atoken,receiver);
+    uint256 underlyingBalance2_=  tokenBalanceOf(e,asset,receiver);
+
+    // uint256 changeInBalance2 = aTokenBalance2_- _aTokenBalance;
+
+    assert amount2 > amount1 && !fromToUnderlyingAsset => aTokenBalance2_ > aTokenBalance1_;
+    assert amount2 > amount1 && fromToUnderlyingAsset => underlyingBalance2_ > underlyingBalance1_;
+}
+
+//20 - user with zero reward balance cannot bridge rewards using bridgeRewards_L2
+rule zeroRewardBalanceCannotBridgeToL1(env e) {
+    address receiver;address Atoken; address asset;  address static;uint256 amount;bool toUnderlyingAsset; 
+
+    setupTokens(asset, Atoken, static);
+    requireValidUser(e.msg.sender);
+    require tokenBalanceOf(e, REWARD_TOKEN, e.msg.sender) == 0;
+
+    bridgeRewards_L2@withrevert(e, receiver, amount);
+
+    assert lastReverted==true;
+}
+
 ////////////////////////////////////////////////////////////////////////////
 //                       Functions                                        //
 ////////////////////////////////////////////////////////////////////////////
@@ -541,6 +969,7 @@ function callFunctionSetParams(
         return 0;
     }     
 }
+
 
 ////////////////////////////////////////////////////////////////////////////
 //                       Summarizations                                   //

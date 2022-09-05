@@ -15,11 +15,21 @@ interface IBridge_L2 {
         uint256 amount,
         address caller,
         address to,
-        bool toUnderlyingAsset) external;
+        bool toUnderlyingAsset
+    ) external;
 
-    function getRewTokenAddress() external view returns(address);
+    function getRewTokenAddress() external view returns (address);
 
-    function bridgeRewards(address recipient, address caller, uint256 amount) external;
+    function bridgeRewards(
+        address recipient,
+        address caller,
+        uint256 amount
+    ) external;
 
     function claimRewards(address recipient, address staticAToken) external;
+
+    function getStaticATokenBalance(address asset, address user)
+        external
+        view
+        returns (uint256);
 }

@@ -12,36 +12,44 @@ contract BridgeL2Harness is IBridge_L2 {
     uint256 public l2RewardsIndex;
     IERC20_Extended public REW_AAVE;
 
-    modifier onlyL1Bridge()
-    {
-        require (msg.sender == address(BRIDGE_L1), "only owner can access");
+    modifier onlyL1Bridge() {
+        require(msg.sender == address(BRIDGE_L1), "only owner can access");
         _;
-    } 
+    }
 
     /**
      * @dev Sets the `l2RewardsIndex`
      * @param value the value to be assigned to `l2RewardsIndex`
      **/
-    function l2RewardsIndexSetter(uint256 value) external onlyL1Bridge{
+    function l2RewardsIndexSetter(uint256 value) external onlyL1Bridge {
         l2RewardsIndex = value;
     }
-
 
     /**
      * @dev retrieves the address of the StaticAToken on L2
      * @param AToken address of AToken on L1
      **/
     function getStaticATokenAddress(address AToken)
-    public view returns(address) {
+        public
+        view
+        returns (address)
+    {
         return AtokenToStaticAToken_L2[AToken];
     }
 
-    
-    function getRewTokenAddress() external view returns(address) {
+    function getStaticATokenBalance(address asset, address user)
+        external
+        view
+        returns (uint256)
+    {
+        return IStaticAToken(AtokenToStaticAToken_L2[asset]).balanceOf(user);
+    }
+
+    function getRewTokenAddress() external view returns (address) {
         return address(REW_AAVE);
     }
 
-    function address2uint256(address add) external pure returns(uint256){
+    function address2uint256(address add) external pure returns (uint256) {
         return uint256(uint160(add));
     }
 
@@ -75,12 +83,9 @@ contract BridgeL2Harness is IBridge_L2 {
         uint256 amount,
         address caller,
         address to,
-        bool toUnderlyingAsset)
-        external onlyL1Bridge {
-        IERC20_Extended(AtokenToStaticAToken_L2[asset]).burn(
-            caller,
-            amount
-        );
+        bool toUnderlyingAsset
+    ) external onlyL1Bridge {
+        IERC20_Extended(AtokenToStaticAToken_L2[asset]).burn(caller, amount);
 
         BRIDGE_L1.withdraw(
             asset,
@@ -97,14 +102,17 @@ contract BridgeL2Harness is IBridge_L2 {
      * @param recipient The L1 user address that withdraws the reward
      * @param amount The amount of reward token desired to be withdrawn
      **/
-    function bridgeRewards(address recipient, address caller, uint256 amount) 
-    external onlyL1Bridge{
-        IERC20_Extended(REW_AAVE).transferFrom(caller, address(BRIDGE_L1), amount);
-        BRIDGE_L1.receiveRewards(
-            uint256(uint160(caller)),
-            recipient,
+    function bridgeRewards(
+        address recipient,
+        address caller,
+        uint256 amount
+    ) external onlyL1Bridge {
+        IERC20_Extended(REW_AAVE).transferFrom(
+            caller,
+            address(BRIDGE_L1),
             amount
         );
+        BRIDGE_L1.receiveRewards(uint256(uint160(caller)), recipient, amount);
     }
 
     /**
@@ -114,7 +122,9 @@ contract BridgeL2Harness is IBridge_L2 {
      * @param staticAToken The staticAToken address
      **/
     function claimRewards(address caller, address staticAToken)
-    external onlyL1Bridge{
+        external
+        onlyL1Bridge
+    {
         uint256 amount = IStaticAToken(staticAToken).claimRewards(caller);
         IERC20_Extended(REW_AAVE).mint(caller, amount);
     }
