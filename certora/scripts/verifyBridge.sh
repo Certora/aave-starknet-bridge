@@ -1,3 +1,8 @@
+if [[ "$1" ]]
+then
+    RULE="--rule $1"
+fi
+
 certoraRun certora/harness/BridgeHarness.sol \
         certora/harness/BridgeL2Harness.sol \
         certora/harness/DummyERC20UnderlyingA_L1.sol \
@@ -21,14 +26,12 @@ certoraRun certora/harness/BridgeHarness.sol \
                     ATokenWithPoolB_L1:_incentivesController=IncentivesControllerMock_L1 \
                     BridgeL2Harness:BRIDGE_L1=BridgeHarness \
                     BridgeL2Harness:REW_AAVE=DummyERC20RewardToken \
-        --solc solc8.10 \
+        $RULE \
         --optimistic_loop \
         --loop_iter 3 \
         --send_only \
-        --rule sanity \
-        --rule_sanity \
         --cloud \
-        --msg "AAVE S-Net"
+        --msg "AAVE S-Net Bridge"
 
 # The first lines (#1-#11) specifies all the contracts that are being called through the BridgeHarness.sol file.
 # This is a declaration of multiple contracts for the verification context.
