@@ -553,94 +553,6 @@ rule integrityOfDeposit(){
 }
 
 /*
-    @Rule 2
-
-    @Description:
-        If depositing from underlying asset, then:
-        (1) Sender's underlying asset should decrease by amount deposited
-        (2) Sender's aToken balance should remain the same
-        (3) Recipient's staticAToken balance should increase by (static) amount deposited 
-
-        If depositing from aToken, then:
-        (1) Sender's underlying asset should remain the same
-        (2) Sender's aToken balance should decrease by amount deposited (according to bound)
-        (3) Recipient's staticAToken balance should increased by (static) amount deposited
-    @Methods:
-        deposit
-    @Sanity:
-        PASSES
-    @Outcome:
-        PASSES 
-    @Link:
-        https://prover.certora.com/output/69969/f851ebaedd0d9c5dd6b8/?anonymousKey=4aa5c410a0fc0e50bb4ef67923c424822a5f8f2a
-*/
-// rule integrityOfDepositExpanded(){
-//     env e; 
-//     address recipient;
-//     uint256 amount;
-//     address aToken;
-//     address underlyingAsset; 
-//     address staticAToken;
-//     uint256 l2Recipient = BRIDGE_L2.address2uint256(e.msg.sender);
-//     uint16 referralCode;
-//     bool fromUnderlyingAsset; 
-//     uint256 indexL1 = LENDINGPOOL_L1.liquidityIndexByAsset(underlyingAsset);
-    
-//     setupTokens(underlyingAsset, aToken, staticAToken);
-//     setupUser(e.msg.sender);
-//     requireRayIndex(underlyingAsset);
-
-//     // Recipient balances before
-//     uint256 recipientUnderlyingAssetBalanceBefore = tokenBalanceOf(e, underlyingAsset, recipient);
-//     uint256 recipientATokenBalanceBefore = tokenBalanceOf(e, aToken, recipient);
-//     uint256 recipientStaticATokenBalanceBefore = tokenBalanceOf(e, staticAToken, recipient);
-//     uint256 recipientRewardTokenBalanceBefore = tokenBalanceOf(e, REWARD_TOKEN, recipient);
-
-//     // Sender balances before
-//     uint256 senderUnderlyingAssetBalanceBefore = tokenBalanceOf(e, underlyingAsset, e.msg.sender);
-//     uint256 senderATokenBalanceBefore = tokenBalanceOf(e, aToken, e.msg.sender);
-//     uint256 senderStaticATokenBalanceBefore = tokenBalanceOf(e, staticAToken, e.msg.sender);
-//     uint256 senderRewardTokenBalanceBefore = tokenBalanceOf(e, REWARD_TOKEN, e.msg.sender); 
-
-//     uint256 staticAmount = deposit(e, aToken, l2Recipient, amount, referralCode, fromUnderlyingAsset);
-
-//     // Recipient balances after
-//     uint256 recipientUnderlyingAssetBalanceAfter = tokenBalanceOf(e, underlyingAsset, recipient);
-//     uint256 recipientATokenBalanceAfter = tokenBalanceOf(e, aToken, recipient);
-//     uint256 recipientStaticATokenBalanceAfter = tokenBalanceOf(e, staticAToken, recipient);
-//     uint256 recipientRewardTokenBalanceAfter = tokenBalanceOf(e, REWARD_TOKEN, recipient);
-
-//     // Sender balances after
-//     uint256 senderUnderlyingAssetBalanceAfter = tokenBalanceOf(e, underlyingAsset, e.msg.sender);
-//     uint256 senderATokenBalanceAfter = tokenBalanceOf(e, aToken, e.msg.sender);
-//     uint256 senderStaticATokenBalanceAfter = tokenBalanceOf(e, staticAToken, e.msg.sender);
-//     uint256 senderRewardTokenBalanceAfter = tokenBalanceOf(e, REWARD_TOKEN, e.msg.sender); 
-           
-//     if (fromUnderlyingAsset){
-//         assert 
-//         (senderUnderlyingAssetBalanceAfter == senderUnderlyingAssetBalanceBefore - amount) &&
-//         (senderATokenBalanceAfter == senderATokenBalanceBefore) &&
-//         (recipientStaticATokenBalanceAfter == recipientStaticATokenBalanceBefore + staticAmount);
-//     }
-//     else {
-//         assert 
-//         (senderUnderlyingAssetBalanceAfter == senderUnderlyingAssetBalanceBefore) &&
-//         (senderATokenBalanceAfter - senderATokenBalanceBefore + amount <= (indexL1/RAY() + 1)/2) &&
-//         (recipientStaticATokenBalanceAfter == recipientStaticATokenBalanceBefore + staticAmount);
-//     }
-
-//     if (e.msg.sender != recipient) {
-//         assert 
-//         (senderStaticATokenBalanceAfter == senderStaticATokenBalanceBefore) &&
-//         (recipientUnderlyingAssetBalanceAfter == recipientUnderlyingAssetBalanceBefore) &&
-//         (recipientATokenBalanceAfter == recipientATokenBalanceBefore);
-//     }
-
-//     assert senderRewardTokenBalanceAfter == senderRewardTokenBalanceBefore &&
-//            recipientRewardTokenBalanceAfter == recipientRewardTokenBalanceBefore;
-// }
-
-/*
     @Rule 3
 
     @Description:
@@ -3501,6 +3413,98 @@ rule rewardTokenAddressIsConsistent(){
 
     assert (ICRewardBefore == L1RewardBefore && L1RewardBefore == L2RewardBefore) => 
            (ICRewardAfter == L1RewardAfter && L1RewardAfter == L2RewardAfter);
+}
+
+
+/*
+    @Rule 72
+
+    @Description:
+        Expands on integrityOfDeposit rule 
+
+        If depositing from underlying asset, then:
+        (1) Sender's underlying asset should decrease by amount deposited
+        (2) Sender's aToken balance should remain the same
+        (3) Recipient's staticAToken balance should increase by (static) amount deposited 
+
+        If depositing from aToken, then:
+        (1) Sender's underlying asset should remain the same
+        (2) Sender's aToken balance should decrease by amount deposited (according to bound)
+        (3) Recipient's staticAToken balance should increased by (static) amount deposited
+    @Methods:
+        deposit
+    @Sanity:
+        TBD
+    @Outcome:
+        TBD 
+    @Link:
+        TBD
+*/
+rule integrityOfDepositExpanded(){
+    env e; 
+    address recipient;
+    uint256 amount;
+    address aToken;
+    address underlyingAsset; 
+    address staticAToken;
+    uint256 l2Recipient = BRIDGE_L2.address2uint256(e.msg.sender);
+    uint16 referralCode;
+    bool fromUnderlyingAsset; 
+    uint256 indexL1 = LENDINGPOOL_L1.liquidityIndexByAsset(underlyingAsset);
+    
+    setupTokens(underlyingAsset, aToken, staticAToken);
+    setupUser(e.msg.sender);
+    setupUser(recipient);
+    requireRayIndex(underlyingAsset);
+
+    // Recipient balances before
+    uint256 recipientUnderlyingAssetBalanceBefore = tokenBalanceOf(e, underlyingAsset, recipient);
+    uint256 recipientATokenBalanceBefore = tokenBalanceOf(e, aToken, recipient);
+    uint256 recipientStaticATokenBalanceBefore = tokenBalanceOf(e, staticAToken, recipient);
+    uint256 recipientRewardTokenBalanceBefore = tokenBalanceOf(e, REWARD_TOKEN, recipient);
+
+    // Sender balances before
+    uint256 senderUnderlyingAssetBalanceBefore = tokenBalanceOf(e, underlyingAsset, e.msg.sender);
+    uint256 senderATokenBalanceBefore = tokenBalanceOf(e, aToken, e.msg.sender);
+    uint256 senderStaticATokenBalanceBefore = tokenBalanceOf(e, staticAToken, e.msg.sender);
+    uint256 senderRewardTokenBalanceBefore = tokenBalanceOf(e, REWARD_TOKEN, e.msg.sender); 
+
+    uint256 staticAmount = deposit(e, aToken, l2Recipient, amount, referralCode, fromUnderlyingAsset);
+
+    // Recipient balances after
+    uint256 recipientUnderlyingAssetBalanceAfter = tokenBalanceOf(e, underlyingAsset, recipient);
+    uint256 recipientATokenBalanceAfter = tokenBalanceOf(e, aToken, recipient);
+    uint256 recipientStaticATokenBalanceAfter = tokenBalanceOf(e, staticAToken, recipient);
+    uint256 recipientRewardTokenBalanceAfter = tokenBalanceOf(e, REWARD_TOKEN, recipient);
+
+    // Sender balances after
+    uint256 senderUnderlyingAssetBalanceAfter = tokenBalanceOf(e, underlyingAsset, e.msg.sender);
+    uint256 senderATokenBalanceAfter = tokenBalanceOf(e, aToken, e.msg.sender);
+    uint256 senderStaticATokenBalanceAfter = tokenBalanceOf(e, staticAToken, e.msg.sender);
+    uint256 senderRewardTokenBalanceAfter = tokenBalanceOf(e, REWARD_TOKEN, e.msg.sender); 
+           
+    if (fromUnderlyingAsset){
+        assert 
+        (senderUnderlyingAssetBalanceAfter == senderUnderlyingAssetBalanceBefore - amount) &&
+        (senderATokenBalanceAfter == senderATokenBalanceBefore) &&
+        (recipientStaticATokenBalanceAfter == recipientStaticATokenBalanceBefore + staticAmount);
+    }
+    else {
+        assert 
+        (senderUnderlyingAssetBalanceAfter == senderUnderlyingAssetBalanceBefore) &&
+        (senderATokenBalanceAfter - senderATokenBalanceBefore + amount <= (indexL1/RAY() + 1)/2) &&
+        (recipientStaticATokenBalanceAfter == recipientStaticATokenBalanceBefore + staticAmount);
+    }
+
+    if (e.msg.sender != recipient) {
+        assert 
+        (senderStaticATokenBalanceAfter == senderStaticATokenBalanceBefore) &&
+        (recipientUnderlyingAssetBalanceAfter == recipientUnderlyingAssetBalanceBefore) &&
+        (recipientATokenBalanceAfter == recipientATokenBalanceBefore);
+    }
+
+    assert senderRewardTokenBalanceAfter == senderRewardTokenBalanceBefore &&
+           recipientRewardTokenBalanceAfter == recipientRewardTokenBalanceBefore;
 }
 
 ////////////////////////////////////////////////////////////////////////////
