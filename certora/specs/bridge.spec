@@ -726,7 +726,6 @@ filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
 }
 
 // Total supply of Static AToken should not be more than AToken total supply
-//Issue: Precision loss on withdraw
 rule checkSupplyStaticTokenToAToken(method f) 
 filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
     env e;    
@@ -745,9 +744,8 @@ filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
 
     uint256 supplyBefore = _staticToDynamicAmount_Wrapper(supplyStaticATokenBefore, asset, LENDINGPOOL_L1);
 
-
     require static == STATIC_ATOKEN_A;
-    require supplyBefore <= balanceATokenBefore;
+    require supplyBefore == balanceATokenBefore;
 
     // Call any interface function 
     callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
@@ -757,7 +755,7 @@ filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
 
     uint256 supplyAfter = _staticToDynamicAmount_Wrapper(supplyStaticATokenAfter, asset, LENDINGPOOL_L1);
 
-    assert supplyAfter <= balanceATokenAfter;
+    assert supplyAfter == balanceATokenAfter;
 }
 
 // Verify if only initialize function can change approved tokens
