@@ -172,4 +172,25 @@ contract BridgeHarness is Bridge {
     function claimRewardsStatic_L2(address staticAToken) external {
         BRIDGE_L2.claimRewards(msg.sender, staticAToken);
     }    
+
+    function getApprovedTokensLength() external view returns (uint256) {
+         return _approvedL1Tokens.length;
+    }
+
+    function getRewardBalance(uint256 _reward, uint256 diff, address user) external returns (uint256) {
+        _reward += _incentivesController.claimRewards(
+                _approvedL1Tokens,
+                diff,
+                user
+            );
+
+            return _reward;
+    }
+
+    function getl2AddressAToken(address AToken) external view returns (uint256 l2TokenAddress) {
+        return _aTokenData[AToken].l2TokenAddress;
+    }
+
+
 }
+
