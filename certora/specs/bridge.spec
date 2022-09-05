@@ -814,6 +814,40 @@ filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
             f.selector == initiateWithdraw_L2(address, uint256, address, bool).selector);
 }
 
+rule onlyUserCanChangeBalance(method f)
+filtered{f -> messageSentFilter(f)} {
+    env e;    
+    address asset;
+    address AToken;
+    address static;
+    address recipient;
+    bool fromToUA;
+    uint256 amount;
+
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+    setupUser(recipient);
+
+    uint256 staticBalanceBefore = tokenBalanceOf(e, static, recipient);
+    uint256 aTokenBalanceBefore = tokenBalanceOf(e, AToken, recipient);
+    uint256 assetBalanceBefore = tokenBalanceOf(e, asset, recipient);
+
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
+
+    uint256 staticBalanceAfter = tokenBalanceOf(e, static, recipient);
+    uint256 aTokenBalanceAfter = tokenBalanceOf(e, AToken, recipient);
+    uint256 assetBalanceAfter = tokenBalanceOf(e, asset, recipient);
+
+    bool hasChangedStatic = staticBalanceBefore > staticBalanceAfter;
+    bool hasChangedAToken = aTokenBalanceBefore > aTokenBalanceAfter;
+    bool hasChangeAsset = assetBalanceBefore > assetBalanceAfter;
+
+    assert hasChangedStatic 
+           || hasChangedAToken 
+           || hasChangeAsset
+        => e.msg.sender == recipient;
+}
+
 //Total of l2TokenAddresses
 ghost mathint totalApprovedTokens {
     init_state axiom totalApprovedTokens == 0;
@@ -834,6 +868,12 @@ invariant integrityApprovedTokensAndTokenData()
         // Avoiding overflow
         require getApprovedL1TokensLength() < MAX_ARRAY_LENGTH(); 
     } }
+
+invariant integrityZeroBalanceToZeroAddress(env e)
+    tokenBalanceOf(e, STATIC_ATOKEN_A, 0) == 0 
+    && tokenBalanceOf(e, ATOKEN_A, 0) == 0
+    && tokenBalanceOf(e, STATIC_ATOKEN_B, 0) == 0 
+    && tokenBalanceOf(e, ATOKEN_B, 0) == 0
 
 // Should revert when try to withdraw with 0 static balance
 rule shouldRevertWithdrawZeroStaticBalance(){
