@@ -53,6 +53,7 @@ methods {
     _dynamicToStaticAmount_Wrapper(uint256, address, address) envfree //(ILendingPool)
     _computeRewardsDiff_Wrapper(uint256, uint256, uint256) envfree
     getRewardBalance(address) returns(uint256) envfree
+    getApprovedL1TokensLength() returns (uint256) envfree
     _getCurrentRewardsIndex_Wrapper(address) returns (uint256) 
     initiateWithdraw_L2(address, uint256, address, bool)
     bridgeRewards_L2(address, uint256)
@@ -266,6 +267,50 @@ filtered{f -> messageSentFilter(f)} {
 
     assert balanceSumBefore == balanceSumAfter;
    
+}
+
+rule approvedTokenLengthCanOnlyBeChangedBySpecificFunctions(method f) 
+filtered{f -> messageSentFilter(f)} {
+    env e;
+    address asset;
+    address AToken;
+    address static;
+    address recipient;
+    bool fromToUA;
+    uint256 amount;
+    uint16 referralCode;
+
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+    uint256 approvedL1TokensLengthBefore = getApprovedL1TokensLength();
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
+
+    uint256 approvedL1TokensLengthAfter = getApprovedL1TokensLength();
+    require approvedL1TokensLengthAfter != approvedL1TokensLengthBefore;
+    assert f.selector == initialize(uint256, address, address, address[], uint256[]).selector;
+}
+
+rule staticBalanceCanOnlyBeChangedBySpecificFunction(method f) filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
+    
+    env e;
+    address asset;
+    address AToken;
+    address static;
+    address recipient;
+    bool fromToUnderlyingAsset;
+    uint256 amount;
+    uint16 referralCode;
+    
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+    uint256 staticTokenBalanceOfRecipientBefore = tokenBalanceOf(e, static, recipient);
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUnderlyingAsset);
+
+    uint256 staticTokenBalanceOfRecipientAfter = tokenBalanceOf(e, static, recipient);
+
+    assert staticTokenBalanceOfRecipientAfter != staticTokenBalanceOfRecipientBefore =>
+    (f.selector == deposit(address, uint256, uint256, uint16, bool).selector 
+    || f.selector == initiateWithdraw_L2(address, uint256, address, bool).selector);
 }
 
 ////////////////////////////////////////////////////////////////////////////
