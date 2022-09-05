@@ -575,3 +575,149 @@ function rayDivConst(uint256 a, uint256 b) returns uint256
     require a <= (max_uint - myValue/2) / RAY();
     return to_uint256((2*a + val_Ray) / (2*val_Ray));
 }
+
+/*
+    @Rule
+
+    @Description:
+        If an AToken is not approved, then depositing it should revert
+*/
+rule unapproved_token_cannot_be_deposited() {
+    env e;
+    setupUser(e.msg.sender);
+    
+    address aToken; // AAVE Token
+    address asset;  // underlying asset
+    uint256 l2Recipient = BRIDGE_L2.address2uint256(e.msg.sender);
+    uint16 referralCode;
+    bool fromUA; // (deposit) from underlying asset
+    uint256 amount;
+    requireRayIndex(asset);
+    require asset == UNDERLYING_ASSET_A || asset == UNDERLYING_ASSET_B;
+    require aToken == ATOKEN_A || aToken == ATOKEN_B;
+    require getLendingPoolOfAToken(aToken) == LENDINGPOOL_L1;
+    requireInvariant ATokenAssetPair(asset, aToken);
+
+    require getUnderlyingAssetOfAToken(aToken) == 0; // aToken is not approved
+
+    deposit@withrevert(e, aToken, l2Recipient, amount, referralCode, fromUA);
+    assert lastReverted;
+}
+
+/*
+    @Rule
+
+    @Description:
+        Deposit affects balances of asset, aToken and staticToken on various addresses.
+        Make sure the balances are updated properly. 
+*/
+rule integrity_of_deposit() {
+    env e;
+    setupUser(e.msg.sender);
+    
+    address aToken; // AAVE Token
+    address asset;  // underlying asset
+    address static; // static AToken on Starknet
+    requireRayIndex(asset);
+    setupTokens(asset, aToken, static);
+
+    uint256 l2Recipient = BRIDGE_L2.address2uint256(e.msg.sender);
+    uint16 referralCode;
+    bool fromUA; // (deposit) from underlying asset
+    uint256 amount;
+    
+    address lendingPool = getLendingPoolOfAToken(aToken);
+
+    uint256 _userBalanceOfAToken = tokenBalanceOf(e, aToken, e.msg.sender);
+    uint256 _bridgeBalanceOfAToken = tokenBalanceOf(e, aToken, currentContract);
+    uint256 _userBalanceOfAsset = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 _atokenBalanceOfAsset = tokenBalanceOf(e, asset, aToken);
+    uint256 _poolBalanceOfAsset = tokenBalanceOf(e, asset, lendingPool);
+    uint256 _userBalanceOfStatic = tokenBalanceOf(e, static, e.msg.sender);
+
+    uint256 staticAmount = deposit(e, aToken, l2Recipient, amount, referralCode, fromUA);
+
+    uint256 userBalanceOfAToken_ = tokenBalanceOf(e, aToken, e.msg.sender);
+    uint256 bridgeBalanceOfAToken_ = tokenBalanceOf(e, aToken, currentContract);
+    uint256 userBalanceOfAsset_ = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 atokenBalanceOfAsset_ = tokenBalanceOf(e, asset, aToken);
+    uint256 poolBalanceOfAsset_ = tokenBalanceOf(e, asset, lendingPool);
+    uint256 userBalanceOfStatic_ = tokenBalanceOf(e, static, e.msg.sender);
+
+    if (fromUA) { // depositing underlying asset
+        assert _userBalanceOfAsset - amount == userBalanceOfAsset_;
+        assert _atokenBalanceOfAsset + amount == atokenBalanceOfAsset_;
+        assert _poolBalanceOfAsset == poolBalanceOfAsset_;
+        assert _userBalanceOfAToken == userBalanceOfAToken_;
+        assert _bridgeBalanceOfAToken < bridgeBalanceOfAToken_;
+    } else { // depositing AToken
+        assert _userBalanceOfAsset == userBalanceOfAsset_;
+        assert _atokenBalanceOfAsset == atokenBalanceOfAsset_;
+        assert _poolBalanceOfAsset == poolBalanceOfAsset_;
+        assert _userBalanceOfAToken > userBalanceOfAToken_;
+        assert _bridgeBalanceOfAToken < bridgeBalanceOfAToken_;
+        assert _userBalanceOfAToken + _bridgeBalanceOfAToken == userBalanceOfAToken_ + bridgeBalanceOfAToken_;
+    }
+    assert _userBalanceOfStatic + staticAmount == userBalanceOfStatic_;
+}
+
+/*
+    @Rule
+
+    @Description:
+        The balance of AToken in bridge should decrease only if withdraw function is called
+
+    @Note:
+        The rule should have passed if not for
+        > certorafallback_0() 
+                reachability check FAILED (assertion is unreachable):
+        https://prover.certora.com/output/15154/596ef594ae8817b7df71?anonymousKey=04d88f66264fa2245f18eb73c811734fe9f9e7fc
+*/
+rule only_withdraw_function_decreases_AToken_in_bridge(method f)
+filtered{f -> messageSentFilter(f)}  {
+    env e;
+    setupUser(e.msg.sender);
+
+    address asset;
+    address aToken;
+    address static;
+    setupTokens(asset, aToken, static);
+
+    address recipient;
+    uint256 amount;
+    bool fromToUA;
+
+    uint256 _bridgeBalanceOfAToken = tokenBalanceOf(e, aToken, currentContract);
+    // Call any interface function 
+    callFunctionSetParams(f, e, recipient, aToken, asset, amount, fromToUA);
+
+    uint256 bridgeBalanceOfAToken_ = tokenBalanceOf(e, aToken, currentContract);
+
+    assert bridgeBalanceOfAToken_ < _bridgeBalanceOfAToken => // aToken balance in bridge decreased
+        f.selector == initiateWithdraw_L2(address, uint256, address, bool).selector;
+}
+
+/*
+    @Rule
+
+    @Description:
+        User cannot withdraw more than owned static token 
+*/
+rule user_cannot_withdraw_more_than_owned(uint256 staticAmount) {
+    env e;
+    setupUser(e.msg.sender);
+    
+    address underlying;
+    address aToken;
+    address static;
+    setupTokens(underlying, aToken, static);
+    bool toUnderlyingAsset;
+    uint256 userBalanceOfStatic = tokenBalanceOf(e, static, e.msg.sender);
+    require staticAmount > userBalanceOfStatic;
+    address recipient;
+    require recipient != aToken;
+    require recipient != currentContract;
+
+    initiateWithdraw_L2@withrevert(e, aToken, staticAmount, recipient, toUnderlyingAsset);
+    assert lastReverted;
+}
