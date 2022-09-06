@@ -48,13 +48,19 @@ contract IncentivesControllerMock_L1 {
         uint256 amount,
         address to
     ) external returns (uint256) {
-        require (msg.sender == L1_Bridge,
-             "only the L1 bridge interacts with the controller");
+        require(
+            msg.sender == L1_Bridge,
+            "only the L1 bridge interacts with the controller"
+        );
         _rewardToken.transfer(to, amount);
         return amount;
     }
 
-    function REWARD_TOKEN() external view returns (IERC20){
+    function REWARD_TOKEN() external view returns (IERC20) {
         return _rewardToken;
+    }
+
+    function getL1Bridge() external view returns (address) {
+        return L1_Bridge;
     }
 }
