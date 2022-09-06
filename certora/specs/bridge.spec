@@ -222,6 +222,28 @@ filtered{f -> messageSentFilter(f) && f.selector != bridgeRewards_L2(address, ui
     assert rewardAfter >= rewardBefore;
 }
 
+rule rewardBalanceCanChangeOnlyBySpecificFunction(method f,env e) filtered{f -> messageSentFilter(f)} {
+    calldataarg args;
+    address user;
+    address asset;
+    address Atoken;
+    address static;
+    address recipient;
+    uint256 amount;
+    bool fromUnderlyingAsset;
+
+    requireValidUser(e.msg.sender);
+    setupTokens(asset, Atoken, static);
+
+    uint256 rewardBalanceBefore = getRewardBalance(user);
+    callFunctionSetParams(f,e,recipient,Atoken,asset,amount,fromUnderlyingAsset);
+    uint256 rewardBalanceAfter = getRewardBalance(user);
+    assert rewardBalanceBefore != rewardBalanceAfter => 
+    f.selector == initiateWithdraw_L2(address,uint256,address,bool).selector 
+    || f.selector == bridgeRewards_L2(address,uint256).selector 
+    || f.selector == claimRewardsStatic_L2(address).selector;
+}
+
 rule approvedL1TokenLengthCanOnlyBeChangedByInitialize(method f,env e) 
 filtered{f -> messageSentFilter(f)} {
     address asset;
@@ -316,6 +338,25 @@ rule staticBalanceCanOnlyBeChangedByCertainFunction(method f,env e) filtered { f
         || f.selector == initiateWithdraw_L2(address, uint256, address, bool).selector;
 }
 
+rule cannotWithdrawWhenZeroBalance(env e) {
+    address recipient;
+    address Atoken; 
+    address asset;  
+    address static; 
+    uint256 amount; 
+    bool fromtoUnderlyingAsset; 
+
+    setupTokens(asset, Atoken, static);
+    requireValidUser(e.msg.sender);
+
+    require (recipient != Atoken && recipient != currentContract);
+    require tokenBalanceOf(e, static, e.msg.sender) == 0;
+
+    initiateWithdraw_L2@withrevert(e, Atoken, amount, recipient, fromtoUnderlyingAsset);
+
+    assert lastReverted==true;
+}
+
 rule claimRewardsIntegrety() {
     env e;
     address Atoken;
@@ -329,6 +370,26 @@ rule claimRewardsIntegrety() {
     claimRewardsStatic_L2@withrevert(e, static);
 
     assert lastReverted == true;
+}
+
+rule someVarsCanNotBeChangedAfterInitializationOfContract(method f,env e,calldataarg args) filtered{f -> messageSentFilter(f) && excludeInitialize(f)}{
+    
+    address messagingContractBefore = _messagingContract(e);
+    uint256 l2BridgeBefore = _l2Bridge(e);
+    address rewardTokenBefore = _rewardToken();
+    address incentivesControllerBefore = _incentivesController(e);
+
+    f(e,args);
+    
+    address messagingContractAfter = _messagingContract(e);
+    uint256 l2BridgeAfter = _l2Bridge(e);
+    address rewardTokenAfter = _rewardToken();
+    address incentivesControllerAfter = _incentivesController(e);
+
+    assert messagingContractBefore == messagingContractAfter;
+    assert l2BridgeBefore == l2BridgeAfter;
+    assert rewardTokenBefore == rewardTokenAfter;
+    assert incentivesControllerBefore == incentivesControllerAfter;
 }
 
 rule cantExtractAssetsFromL1WhenNoAssetsOnL2(method f,env e) filtered {f -> messageSentFilter(f) && f.selector != deposit(address, uint256, uint256, uint16, bool).selector} {
