@@ -37,10 +37,13 @@ methods {
  // Note that some functions should only be called via BridgeHarness
  // e.g. withdraw(), invoked by the initiateWithdraw on L2.
     initialize(uint256, address, address, address[], uint256[])
+    initializing() returns (bool) envfree
     deposit(address, uint256, uint256, uint16, bool) returns (uint256) 
     withdraw(address, uint256, address, uint256, uint256, bool)
     updateL2State(address)
     receiveRewards(uint256, address, uint256)
+    listEqualLength(address[], uint256[]) returns (bool) envfree
+    approvedL1TokensLength() returns(uint256) envfree
     
 /*************************
  *     BridgeHarness     *
@@ -57,6 +60,7 @@ methods {
     bridgeRewards_L2(address, uint256)
     getUnderlyingAssetOfAToken(address) returns (address) envfree
     underlyingtoAToken(address) returns (address) => DISPATCHER(true)
+    Cairo_isValidL2Address(uint256) returns (bool) envfree
 
 /******************************
  *     IStarknetMessaging     *
@@ -259,6 +263,46 @@ filtered{f -> messageSentFilter(f)} {
             , "balanceOf changed";
 }
 
+// added 1
+rule noImpactOnOther(method f, uint256 amount) filtered {
+    f -> f.selector==receiveRewards(uint256,address,uint256).selector
+}
+{
+    env e;  
+    calldataarg args;  
+    address asset;
+    address AToken;
+    address static;
+    address recipient;
+    address other;
+    bool fromToUA;
+    
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+    setupUser(recipient);
+    setupUser(other);
+
+    require other!=recipient && other != e.msg.sender;
+
+    uint256 _balanceU = tokenBalanceOf(e, asset, other);
+    uint256 _balanceA = tokenBalanceOf(e, AToken, other);
+    uint256 _balanceS = tokenBalanceOf(e, static, other);
+    uint256 _balanceR = tokenBalanceOf(e, rewardToken(), other);
+    
+    // Call any interface function 
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
+
+    uint256 balanceU_ = tokenBalanceOf(e, asset, other);
+    uint256 balanceA_ = tokenBalanceOf(e, AToken, other);
+    uint256 balanceS_ = tokenBalanceOf(e, static, other);
+    uint256 balanceR_ = tokenBalanceOf(e, rewardToken(), other);
+
+    assert _balanceU == balanceU_;
+    assert _balanceA == balanceA_;
+    assert _balanceS == balanceS_;
+    assert _balanceR == balanceR_;
+}
+
 // A call to deposit and a subsequent call to withdraw with the same amount of 
 // staticATokens received, should yield the same original balance for the user.
 // For underlying tokens, the condition is modified by a bound, since staticToDynamic is not inversible with dyanmicToStatic.
@@ -299,6 +343,233 @@ rule depositWithdrawReversed(uint256 amount)
     assert balanceS1 == balanceS3;
     assert fromUA == toUA => balanceU3 - balanceU1 <= (indexL1/RAY()+1)/2;
     assert fromUA == toUA => balanceA3 == balanceA1;
+}
+
+// added 2
+rule depositAdditive(uint256 amount1, uint256 amount2) {
+    env e;
+    address Atoken; // AAVE Token
+    address asset;  // underlying asset
+    address static; // staticAToken
+    uint256 l2Recipient = BRIDGE_L2.address2uint256(e.msg.sender);
+    uint16 referralCode;
+    bool fromUA; // (deposit) from underlying asset
+    bool toUA; // (withdraw) to underlying asset
+    uint256 b;
+
+    setupTokens(asset, Atoken, static);
+    setupUser(e.msg.sender);
+    requireRayIndex(asset);
+    // require l2Recipient != e.msg.sender;
+
+    uint256 indexL1 = LENDINGPOOL_L1.liquidityIndexByAsset(asset);
+
+	storage initialStorage = lastStorage;
+
+    uint256 staticAmount1 = deposit(e, Atoken, l2Recipient, amount1, referralCode, fromUA);
+    uint256 staticAmount2 = deposit(e, Atoken, l2Recipient, amount2, referralCode, fromUA);
+    uint256 balanceU_12 = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 balanceA_12 = tokenBalanceOf(e, Atoken, e.msg.sender);
+    uint256 balanceS_12 = tokenBalanceOf(e, static, e.msg.sender);
+
+	uint256 staticAmount = deposit(e, Atoken, l2Recipient, amount1 + amount2, referralCode, fromUA) at initialStorage;
+    uint256 balanceU_all = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 balanceA_all = tokenBalanceOf(e, Atoken, e.msg.sender);
+    uint256 balanceS_all = tokenBalanceOf(e, static, e.msg.sender);
+
+    assert staticAmount1 + staticAmount2 - 1 <= staticAmount 
+            && staticAmount1 + staticAmount2 + 1 >= staticAmount;
+    assert balanceU_12 == balanceU_all;
+    assert balanceA_12-balanceA_all<=rayMulConst(1, b) && balanceA_all-balanceA_12<=rayMulConst(1, b);
+    assert balanceS_12 - balanceS_all <= 1 
+        && balanceS_all - balanceS_12 <= 1;
+}
+
+// added 3
+rule depositAtokenVsUA(uint256 amount) {
+    env e;
+    address Atoken; // AAVE Token
+    address asset;  // underlying asset
+    address static; // staticAToken
+    uint256 l2Recipient = BRIDGE_L2.address2uint256(e.msg.sender);
+    uint16 referralCode;
+    bool fromUA; // (deposit) from underlying asset
+    bool toUA; // (withdraw) to underlying asset
+    uint256 b;
+
+    setupTokens(asset, Atoken, static);
+    setupUser(e.msg.sender);
+    requireRayIndex(asset);
+    uint256 indexL1 = LENDINGPOOL_L1.liquidityIndexByAsset(asset);
+
+	storage initialStorage = lastStorage;
+
+    uint256 balanceU = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 balanceA = tokenBalanceOf(e, Atoken, e.msg.sender);
+    uint256 balanceS = tokenBalanceOf(e, static, e.msg.sender);
+
+    uint256 staticAmount1 = deposit(e, Atoken, l2Recipient, amount, referralCode, true);
+    uint256 balanceU_fromUA = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 balanceA_fromUA = tokenBalanceOf(e, Atoken, e.msg.sender);
+    uint256 balanceS_fromUA = tokenBalanceOf(e, static, e.msg.sender);
+
+    uint256 staticAmount2 = deposit(e, Atoken, l2Recipient, amount, referralCode, false) at initialStorage;
+    uint256 balanceU_fromAT = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 balanceA_fromAT = tokenBalanceOf(e, Atoken, e.msg.sender);
+    uint256 balanceS_fromAT = tokenBalanceOf(e, static, e.msg.sender);
+
+    assert staticAmount1 == staticAmount2;
+    assert balanceU == balanceU_fromUA + amount && balanceU == balanceU_fromAT;
+    assert balanceA == balanceA_fromUA && balanceA == balanceA_fromAT + rayMulConst(rayDivConst(amount, b), b);
+    assert balanceS == balanceS_fromUA - staticAmount1 && balanceS == balanceS_fromAT - staticAmount2;
+}
+
+// added 4
+rule withdrawAdditive() {
+    env e;
+    address Atoken; // AAVE Token
+    address asset;  // underlying asset
+    address static; // staticAToken
+    uint256 l2sender;
+    address recipient;
+    uint256 staticAmount1;
+    uint256 staticAmount2;
+    uint256 l2RewardsIndex;
+    bool toUnderlyingAsset;
+    uint256 b;
+
+    setupTokens(asset, Atoken, static);
+    setupUser(e.msg.sender);
+    requireRayIndex(asset);
+    uint256 indexL1 = LENDINGPOOL_L1.liquidityIndexByAsset(asset);
+
+	storage initialStorage = lastStorage;
+
+    initiateWithdraw_L2(e, Atoken, staticAmount1, recipient, toUnderlyingAsset);
+    initiateWithdraw_L2(e, Atoken, staticAmount2, recipient, toUnderlyingAsset);
+
+    uint256 balanceU_12 = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 balanceA_12 = tokenBalanceOf(e, Atoken, e.msg.sender);
+    uint256 balanceS_12 = tokenBalanceOf(e, static, e.msg.sender);
+    uint256 balanceR_12 = tokenBalanceOf(e, rewardToken(), e.msg.sender);
+
+    initiateWithdraw_L2(e, Atoken, staticAmount1 + staticAmount2, recipient, toUnderlyingAsset) at initialStorage;
+    uint256 balanceU_all = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 balanceA_all = tokenBalanceOf(e, Atoken, e.msg.sender);
+    uint256 balanceS_all = tokenBalanceOf(e, static, e.msg.sender);
+    uint256 balanceR_all = tokenBalanceOf(e, rewardToken(), e.msg.sender);
+
+    assert balanceU_12 == balanceU_all;
+    assert balanceA_12 == balanceA_all;
+    assert balanceS_12 == balanceS_all;
+    assert balanceR_12 <= balanceR_all; // the seperate withdraw allows more time for reward accumulation
+}
+
+// added 5
+rule withdrawAtokenVsUA(uint256 amount) {
+    env e;
+    address Atoken; // AAVE Token
+    address asset;  // underlying asset
+    address static; // staticAToken
+    uint256 l2sender;
+    address recipient;
+    uint256 staticAmount;
+    uint256 l2RewardsIndex;
+    uint256 b;
+
+    setupTokens(asset, Atoken, static);
+    setupUser(e.msg.sender);
+    setupUser(recipient);
+    requireRayIndex(asset);
+    uint256 indexL1 = LENDINGPOOL_L1.liquidityIndexByAsset(asset);
+
+	storage initialStorage = lastStorage;
+
+    // require recipient != currentContract
+    uint256 balanceU = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 balanceA = tokenBalanceOf(e, Atoken, e.msg.sender);
+    uint256 balanceS = tokenBalanceOf(e, static, e.msg.sender);
+    uint256 balanceR = tokenBalanceOf(e, rewardToken(), e.msg.sender);
+
+    uint256 balanceUr = tokenBalanceOf(e, asset, recipient);
+    uint256 balanceAr = tokenBalanceOf(e, Atoken, recipient);
+    uint256 balanceSr = tokenBalanceOf(e, static, recipient);
+    uint256 balanceRr = tokenBalanceOf(e, rewardToken(), recipient);
+
+    initiateWithdraw_L2(e, Atoken, staticAmount, recipient, true);
+    uint256 balanceU_toUA = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 balanceA_toUA = tokenBalanceOf(e, Atoken, e.msg.sender);
+    uint256 balanceS_toUA = tokenBalanceOf(e, static, e.msg.sender);
+    uint256 balanceR_toUA = tokenBalanceOf(e, rewardToken(), e.msg.sender);
+
+    uint256 balanceUr_toUA = tokenBalanceOf(e, asset, recipient);
+    uint256 balanceAr_toUA = tokenBalanceOf(e, Atoken, recipient);
+    uint256 balanceSr_toUA = tokenBalanceOf(e, static, recipient);
+    uint256 balanceRr_toUA = tokenBalanceOf(e, rewardToken(), recipient);
+
+    initiateWithdraw_L2(e, Atoken, staticAmount, recipient, false) at initialStorage;
+    uint256 balanceU_toAT = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 balanceA_toAT = tokenBalanceOf(e, Atoken, e.msg.sender);
+    uint256 balanceS_toAT = tokenBalanceOf(e, static, e.msg.sender);
+    uint256 balanceR_toAT = tokenBalanceOf(e, rewardToken(), e.msg.sender);
+
+    uint256 balanceUr_toAT = tokenBalanceOf(e, asset, recipient);
+    uint256 balanceAr_toAT = tokenBalanceOf(e, Atoken, recipient);
+    uint256 balanceSr_toAT = tokenBalanceOf(e, static, recipient);
+    uint256 balanceRr_toAT = tokenBalanceOf(e, rewardToken(), recipient);
+
+    assert balanceS == balanceS_toUA + staticAmount 
+        &&  balanceS == balanceS_toAT + staticAmount;
+    assert balanceUr == balanceUr_toUA - rayMulConst(staticAmount, b) 
+        && balanceAr == balanceAr_toAT - rayMulConst(staticAmount, b);
+    assert balanceUr == balanceUr_toAT
+        && balanceAr == balanceAr_toUA;
+    assert balanceRr <= balanceRr_toUA 
+        && balanceRr <= balanceRr_toAT; 
+}
+
+
+// added 6
+rule zeroWithdrawRevert(uint256 amount, method f) {
+    env e;
+    address Atoken; // AAVE Token
+    address asset;  // underlying asset
+    address static; // staticAToken
+    uint256 l2sender;
+    address l2Recipient;
+    uint256 staticAmount;
+    uint256 l2RewardsIndex;
+    bool fromToUA;
+    uint256 b;
+
+    setupTokens(asset, Atoken, static);
+    setupUser(e.msg.sender);
+    requireRayIndex(asset);
+
+    initiateWithdraw_L2@withrevert(e, Atoken, 0, l2Recipient, fromToUA);
+    assert(lastReverted);
+}
+
+// added 7
+rule cannontWithdrawMoreThanOwned(uint256 amount) {
+    env e;
+    address Atoken; // AAVE Token
+    address asset;  // underlying asset
+    address static; // staticAToken
+    uint256 l2sender;
+    address l2Recipient;
+    uint256 staticAmount;
+    uint256 l2RewardsIndex;
+    bool fromToUA;
+    uint256 b;
+
+    setupTokens(asset, Atoken, static);
+    setupUser(e.msg.sender);
+    requireRayIndex(asset);
+    require amount > tokenBalanceOf(e, static, e.msg.sender);
+
+    initiateWithdraw_L2@withrevert(e, Atoken, amount, l2Recipient, fromToUA);
+    assert(lastReverted);
 }
 
 // Checks that the transitions between static to dynamic are inverses.
@@ -381,6 +652,153 @@ rule initializeIntegrity(address AToken, address asset)
         getUnderlyingAssetHelper(AToken) == asset 
         <=>
         getATokenOfUnderlyingAsset(LENDINGPOOL_L1, asset) == AToken);
+}
+
+
+// added 8
+rule initializeConditions(address AToken, address asset, uint256 l2Bridge, address messagingContract, address incentivesControllerVar, address[] l1Tokens, uint256[] l2Tokens)
+{
+    env e;
+
+    initialize@withrevert(e, l2Bridge, messagingContract, incentivesControllerVar, l1Tokens, l2Tokens);
+    bool succeeded = !lastReverted;
+
+    assert !Cairo_isValidL2Address(l2Bridge) => !succeeded;
+    assert incentivesControllerVar == 0 => !succeeded;
+    assert !listEqualLength(l1Tokens, l2Tokens) => !succeeded;  // why does l1Tokens.length == l2Tokens.length not work?
+    // assert l1Tokens.length == 0 => !succeeded; // should fail
+    // assert messagingContract ==0 => !succeeded; // should fail
+}
+
+// added 9
+rule cannotInitializeTwice(address AToken, address asset)
+{
+    env e1;
+    calldataarg args1;
+    env e2;
+    calldataarg args2;
+
+    // Post-constructor conditions
+    require getUnderlyingAssetHelper(AToken) == 0;
+    require getATokenOfUnderlyingAsset(LENDINGPOOL_L1, asset) == 0;
+
+    require initializing() == false;
+
+    initialize@withrevert(e1, args1);
+    bool firstSucceeded = !lastReverted;
+
+    initialize@withrevert(e2, args2);
+    bool secondSucceeded = !lastReverted;
+
+    assert  firstSucceeded => !secondSucceeded, "second initialize call should fail";
+}
+
+// added 10
+rule onlyInitializeCanChangeApprovedL1TokensList(method f) {
+    env e;
+    calldataarg args;
+    //length of the approved tokens array before
+    uint256 _length = approvedL1TokensLength();
+    f(e, args);
+    //length of the approved tokens array after
+    uint256 length_ = approvedL1TokensLength();
+    //if theres a change the function called can only be initialize
+    assert _length != length_ => f.selector == initialize(uint256, address, address, address[], uint256[]).selector;
+
+}
+
+// added 11
+rule cannotBeCalledExternally(method f) filtered{f -> !messageSentFilter(f)}
+{
+    env e; 
+    calldataarg args;
+    require withdrawMessageStatus(e)==false && bridgeRewardsMessageStatus(e)==false;
+    f@withrevert(e, args);
+    bool succeeded = !lastReverted;
+    assert succeeded==false; // unreachable
+}
+
+// added 12
+rule rewardsIndexIncreasingOverTime() {
+    env e1; 
+    env e2;
+    address aToken;
+    require e1.block.timestamp < e2.block.timestamp;
+    
+    uint256 _l2RewardsIndex = BRIDGE_L2.l2RewardsIndex();
+    
+    assert _getCurrentRewardsIndex_Wrapper(e1, aToken) <= _getCurrentRewardsIndex_Wrapper(e2, aToken);
+    assert _l2RewardsIndex <= BRIDGE_L2.l2RewardsIndex();
+}
+
+// added 13
+rule L2RewardsIndexLtL1() {
+    method f;
+    env e;
+    address receiver;
+    address aToken;
+    address asset;
+    address static;
+    uint256 amount; 
+    bool fromToUA;
+
+    require getUnderlyingAssetHelper(aToken) == 0;
+    require getATokenOfUnderlyingAsset(LENDINGPOOL_L1, asset) == 0;
+
+    require BRIDGE_L2.l2RewardsIndex() <= _getCurrentRewardsIndex_Wrapper(e, aToken);
+    callFunctionSetParams(f, e, receiver, aToken, asset, amount, fromToUA);
+    assert BRIDGE_L2.l2RewardsIndex() <= _getCurrentRewardsIndex_Wrapper(e, aToken);
+}
+
+// added 14
+rule bridgeRewardsIntegrity() {
+    env e;
+    address recipient;
+    uint256 amount;
+    setupUser(e.msg.sender);
+    setupUser(recipient);
+    require e.msg.sender!=recipient;
+
+    uint256 _balanceRs = tokenBalanceOf(e, rewardToken(), e.msg.sender);
+    uint256 _balanceRr = tokenBalanceOf(e, rewardToken(), recipient);
+    uint256 _balanceRb = tokenBalanceOf(e, rewardToken(), currentContract);
+    bridgeRewards_L2@withrevert(e, recipient, amount);
+    bool succeeded = !lastReverted;
+    uint256 balanceRs_ = tokenBalanceOf(e, rewardToken(), e.msg.sender);
+    uint256 balanceRr_ = tokenBalanceOf(e, rewardToken(), recipient);
+    uint256 balanceRb_ = tokenBalanceOf(e, rewardToken(), currentContract);
+
+    if (amount> 0 && succeeded) {
+        assert balanceRs_ < _balanceRs;
+        assert balanceRr_ > _balanceRr;
+        assert balanceRb_ == _balanceRb;
+    }
+    assert amount > _balanceRs => !succeeded;
+}
+
+// added 15
+rule bridgeRewardsAdditive() {
+    env e;
+    address recipient;
+    uint256 amount1;
+    uint256 amount2;
+
+    uint256 balanceRs = tokenBalanceOf(e, rewardToken(), e.msg.sender);
+    require amount1+amount2 < balanceRs;
+
+    storage initialStorage = lastStorage;
+    bridgeRewards_L2(e, recipient, amount1);
+    bridgeRewards_L2(e, recipient, amount2);
+
+    uint256 _balanceRs = tokenBalanceOf(e, rewardToken(), e.msg.sender);
+    uint256 _balanceRr = tokenBalanceOf(e, rewardToken(), recipient);
+    
+    bridgeRewards_L2(e, recipient, amount1+amount2) at initialStorage;
+    uint256 balanceRs_ = tokenBalanceOf(e, rewardToken(), e.msg.sender);
+    uint256 balanceRr_ = tokenBalanceOf(e, rewardToken(), recipient);
+    
+    assert balanceRs_ == _balanceRs;
+    assert balanceRr_ == _balanceRr;
 }
 
 // Sanity(f) - there exists a non-reverting path for a the contract method f.
@@ -533,6 +951,10 @@ function callFunctionSetParams(
     }
     else if (f.selector == bridgeRewards_L2(address, uint256).selector) {
         bridgeRewards_L2(e, receiver, amount);
+        return 0;
+    }
+    else if (f.selector == updateL2State(address).selector) {
+        updateL2State(e, aToken);
         return 0;
     }
     else {
