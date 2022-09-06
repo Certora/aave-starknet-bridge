@@ -55,6 +55,10 @@ methods {
     _getCurrentRewardsIndex_Wrapper(address) returns (uint256) 
     initiateWithdraw_L2(address, uint256, address, bool)
     bridgeRewards_L2(address, uint256)
+    getRewardTokenAddress() returns (address) envfree;
+    getRewardBalance(address) returns(uint256) envfree;
+
+    getApprovedL1TokensLength() returns(uint256) envfree
     getUnderlyingAssetOfAToken(address) returns (address) envfree
     underlyingtoAToken(address) returns (address) => DISPATCHER(true)
 
@@ -163,6 +167,258 @@ definition messageSentFilter(method f) returns bool =
 ////////////////////////////////////////////////////////////////////////////
 //                       Rules                                            //
 ////////////////////////////////////////////////////////////////////////////
+
+invariant zeroAddressIntegrity(env e)
+    tokenBalanceOf(e, STATIC_ATOKEN_A, 0) == 0 && tokenBalanceOf(e, ATOKEN_A, 0) == 0
+
+rule balanceCanNotBeIncreasedExceptOfSender(method f)
+filtered{f -> messageSentFilter(f)} {
+    env e;
+    calldataarg args;
+    address asset;
+    address user;
+    address token;
+    address AToken;
+    address static;
+    address receiver;
+
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+    setupUser(receiver);
+
+    uint256 staticTokenBalanceBefore = tokenBalanceOf(e, static, receiver);
+    uint256 aTokenBalanceBefore = tokenBalanceOf(e, AToken, receiver);
+    uint256 assetBalanceBefore = tokenBalanceOf(e, asset, receiver);
+
+    f(e, args);
+
+    uint256 staticTokenBalanceAfter = tokenBalanceOf(e, static, receiver);
+    uint256 aTokenBalanceAfter = tokenBalanceOf(e, AToken, receiver);
+    uint256 assetBalanceAfter = tokenBalanceOf(e, asset, receiver);
+
+    assert assetBalanceBefore > assetBalanceAfter => e.msg.sender == receiver;
+    assert aTokenBalanceBefore > aTokenBalanceAfter => e.msg.sender == receiver;
+    assert staticTokenBalanceBefore > staticTokenBalanceAfter => e.msg.sender == receiver;
+
+}
+
+rule integrityOfRewardBalance(method f, env e)
+filtered{f -> messageSentFilter(f) && f.selector != bridgeRewards_L2(address, uint256).selector} {
+    calldataarg args;
+    address user;
+    address receiver;
+    address asset;
+    address Atoken;
+    address static;
+    uint256 amount;
+    bool fromToUnderlyingAsset;
+    setupTokens(asset, Atoken, static);
+    requireValidUser(user);
+
+    uint256 rewardBefore = getRewardBalance(user);
+    callFunctionSetParams(f,e,receiver,Atoken,asset,amount,fromToUnderlyingAsset);
+    uint256 rewardAfter = getRewardBalance(user);
+
+    assert rewardAfter >= rewardBefore;
+}
+
+rule rewardBalanceCanChangeOnlyBySpecificFunction(method f,env e) filtered{f -> messageSentFilter(f)} {
+    calldataarg args;
+    address user;
+    address asset;
+    address Atoken;
+    address static;
+    address recipient;
+    uint256 amount;
+    bool fromUnderlyingAsset;
+
+    requireValidUser(e.msg.sender);
+    setupTokens(asset, Atoken, static);
+
+    uint256 rewardBalanceBefore = getRewardBalance(user);
+    callFunctionSetParams(f,e,recipient,Atoken,asset,amount,fromUnderlyingAsset);
+    uint256 rewardBalanceAfter = getRewardBalance(user);
+    assert rewardBalanceBefore != rewardBalanceAfter => 
+    f.selector == initiateWithdraw_L2(address,uint256,address,bool).selector 
+    || f.selector == bridgeRewards_L2(address,uint256).selector 
+    || f.selector == claimRewardsStatic_L2(address).selector;
+}
+
+rule approvedL1TokenLengthCanOnlyBeChangedByInitialize(method f,env e) 
+filtered{f -> messageSentFilter(f)} {
+    address asset;
+    address AToken;
+    address static;
+    address recipient;
+    bool fromToUnderlyingAsset;
+    uint256 amount;
+
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+    uint256 approvedL1TokensLengthBefore = getApprovedL1TokensLength();
+
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUnderlyingAsset);
+
+    uint256 approvedL1TokensLengthAfter = getApprovedL1TokensLength();
+    assert approvedL1TokensLengthAfter != approvedL1TokensLengthBefore => f.selector == initialize(uint256, address, address, address[], uint256[]).selector;
+}
+
+rule integrityOfBridgeRewardsL2(address recipient, env e) {
+
+    address asset;
+    address static;
+    address aToken;
+    address rewardToken;
+    uint256 rewardAmount;
+
+    setupTokens(asset, aToken, static);
+    setupUser(e.msg.sender);
+
+    require recipient != aToken;
+    require recipient != currentContract;
+    require recipient != e.msg.sender;
+    require rewardAmount > 0;
+    require rewardToken == getRewardTokenAddress();
+
+    uint256 assetBalanceBefore = tokenBalanceOf(e, asset, recipient);
+    uint256 aTokenBalanceBefore = tokenBalanceOf(e, aToken, recipient);
+    uint256 rewardTokenBalanceBefore = tokenBalanceOf(e, rewardToken, recipient);
+
+    bridgeRewards_L2(e, recipient, rewardAmount);
+
+    uint256 assetBalanceAfter = tokenBalanceOf(e, asset, recipient);
+    uint256 aTokenBalanceAfter = tokenBalanceOf(e, aToken, recipient);
+    uint256 rewardTokenBalanceAfter = tokenBalanceOf(e, rewardToken, recipient);
+
+    assert assetBalanceAfter == assetBalanceBefore;
+    assert aTokenBalanceAfter == aTokenBalanceBefore;
+    assert rewardTokenBalanceAfter ==  rewardTokenBalanceBefore + rewardAmount;
+}
+
+rule withdrawIntegrety() {
+    env e;
+    uint256 amount;
+    address underlying;
+    address aToken;
+    address static;
+    bool toUA;
+
+    setupUser(e.msg.sender);
+    setupTokens(underlying, aToken, static);
+
+    address recipient;
+    require recipient != aToken;
+    require recipient != currentContract;
+
+    uint256 staticBalance = tokenBalanceOf(e, static, e.msg.sender);
+
+    initiateWithdraw_L2@withrevert(e, aToken, amount, recipient, toUA);
+    assert amount > staticBalance => lastReverted;
+}
+
+rule staticBalanceCanOnlyBeChangedByCertainFunction(method f,env e) filtered { f -> messageSentFilter(f) } {
+
+    uint256 amount;
+    address asset;
+    address Atoken;
+    address static;
+    bool fromToUnderlyingAsset;
+
+    setupTokens(asset, Atoken, static);
+    setupUser(e.msg.sender);
+
+    uint256 staticTokenBalanceBefore = tokenBalanceOf(e, static, e.msg.sender);
+
+    callFunctionSetParams(f, e, e.msg.sender, Atoken, asset, amount, fromToUnderlyingAsset);
+
+    uint256 staticTokenBalanceAfter = tokenBalanceOf(e, static, e.msg.sender);
+
+    assert amount != 0 && staticTokenBalanceBefore != staticTokenBalanceAfter <=> 
+        f.selector == deposit(address, uint256, uint256, uint16, bool).selector 
+        || f.selector == initiateWithdraw_L2(address, uint256, address, bool).selector;
+}
+
+rule cannotWithdrawWhenZeroBalance(env e) {
+    address recipient;
+    address Atoken; 
+    address asset;  
+    address static; 
+    uint256 amount; 
+    bool fromtoUnderlyingAsset; 
+
+    setupTokens(asset, Atoken, static);
+    requireValidUser(e.msg.sender);
+
+    require (recipient != Atoken && recipient != currentContract);
+    require tokenBalanceOf(e, static, e.msg.sender) == 0;
+
+    initiateWithdraw_L2@withrevert(e, Atoken, amount, recipient, fromtoUnderlyingAsset);
+
+    assert lastReverted==true;
+}
+
+rule claimRewardsIntegrety() {
+    env e;
+    address Atoken;
+    address asset;  
+    address static;
+
+    setupTokens(asset, Atoken, static);
+    setupUser(e.msg.sender);
+
+    claimRewardsStatic_L2(e, static);
+    claimRewardsStatic_L2@withrevert(e, static);
+
+    assert lastReverted == true;
+}
+
+rule someVarsCanNotBeChangedAfterInitializationOfContract(method f,env e,calldataarg args) filtered{f -> messageSentFilter(f) && excludeInitialize(f)}{
+    
+    address messagingContractBefore = _messagingContract(e);
+    uint256 l2BridgeBefore = _l2Bridge(e);
+    address rewardTokenBefore = _rewardToken();
+    address incentivesControllerBefore = _incentivesController(e);
+
+    f(e,args);
+    
+    address messagingContractAfter = _messagingContract(e);
+    uint256 l2BridgeAfter = _l2Bridge(e);
+    address rewardTokenAfter = _rewardToken();
+    address incentivesControllerAfter = _incentivesController(e);
+
+    assert messagingContractBefore == messagingContractAfter;
+    assert l2BridgeBefore == l2BridgeAfter;
+    assert rewardTokenBefore == rewardTokenAfter;
+    assert incentivesControllerBefore == incentivesControllerAfter;
+}
+
+rule cantExtractAssetsFromL1WhenNoAssetsOnL2(method f,env e) filtered {f -> messageSentFilter(f) && f.selector != deposit(address, uint256, uint256, uint16, bool).selector} {
+
+    address user;
+    uint256 amount;
+    address asset;
+    address Atoken;
+    address static;
+    bool fromToUnderlyingAsset;
+
+    setupTokens(asset, Atoken, static);
+    setupUser(e.msg.sender);
+
+    uint256 assetTokenBalanceBefore = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 aTokenBalanceBefore = tokenBalanceOf(e, Atoken, e.msg.sender);
+    uint256 staticTokenBalanceBefore = tokenBalanceOf(e, static, e.msg.sender);
+
+    callFunctionSetParams(f, e, e.msg.sender, Atoken, asset, amount, fromToUnderlyingAsset);
+
+    uint256 assetTokenBalanceAfter = tokenBalanceOf(e, asset, e.msg.sender);
+    uint256 aTokenBalanceAfter = tokenBalanceOf(e, Atoken, e.msg.sender);
+
+    assert (staticTokenBalanceBefore == 0) =>
+        assetTokenBalanceBefore == assetTokenBalanceAfter &&
+        aTokenBalanceBefore == aTokenBalanceAfter;
+
+}
+
 
 /*
     @Rule - a template for rule description:
