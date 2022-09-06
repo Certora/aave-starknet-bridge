@@ -3436,9 +3436,9 @@ rule rewardTokenAddressIsConsistent(){
     @Sanity:
         PASSES
     @Outcome:
-        PASSES 
+        FAILS 
     @Link:
-        https://prover.certora.com/output/69969/6e46c0a1e2c01c76d8b5/?anonymousKey=22381fc84c4a8cd079214fd70a81b7dbf94ff72a
+        https://prover.certora.com/output/69969/87f49f2df4c87961ecb8?anonymousKey=470feab6f784c33a8901c57c9bf68c5863114db2
 */
 rule integrityOfDepositExpanded(){
     env e; 
