@@ -3436,7 +3436,7 @@ rule rewardTokenAddressIsConsistent(){
     @Sanity:
         PASSES
     @Outcome:
-        TBD 
+        PASSES 
     @Link:
         https://prover.certora.com/output/69969/6e46c0a1e2c01c76d8b5/?anonymousKey=22381fc84c4a8cd079214fd70a81b7dbf94ff72a
 */
