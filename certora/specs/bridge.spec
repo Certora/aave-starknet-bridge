@@ -529,59 +529,6 @@ rule withdrawAtokenVsUA(uint256 amount) {
 }
 
 
-rule zeroStaticATokensCannotWithdraw(uint256 amount, method f) filtered {
-    f-> f.selector == initiateWithdraw_L2(address, uint256, address, bool).selector 
-} {
-    env e;
-    address Atoken; // AAVE Token
-    address asset;  // underlying asset
-    address static; // staticAToken
-    uint256 l2sender;
-    address l2Recipient;
-    uint256 staticAmount;
-    uint256 l2RewardsIndex;
-    bool fromToUA;
-    uint256 b;
-
-    setupTokens(asset, Atoken, static);
-    setupUser(e.msg.sender);
-    requireRayIndex(asset);
-    require tokenBalanceOf(e, static, e.msg.sender) == 0;
-
-    uint256 _balanceU = tokenBalanceOf(e, asset, e.msg.sender);
-    uint256 _balanceA = tokenBalanceOf(e, Atoken, e.msg.sender);
-    uint256 _balanceS = tokenBalanceOf(e, static, e.msg.sender);
-    uint256 _balanceR = tokenBalanceOf(e, rewardToken(), e.msg.sender);
-
-    uint256 _balanceUr = tokenBalanceOf(e, asset, l2Recipient);
-    uint256 _balanceAr = tokenBalanceOf(e, Atoken, l2Recipient);
-    uint256 _balanceSr = tokenBalanceOf(e, static, l2Recipient);
-    uint256 _balanceRr = tokenBalanceOf(e, rewardToken(), l2Recipient);
-
-    initiateWithdraw_L2@withrevert(e, Atoken, amount, l2Recipient, fromToUA);
-    bool succeeded = !lastReverted;
-    assert succeeded;
-
-    uint256 balanceU_ = tokenBalanceOf(e, asset, e.msg.sender);
-    uint256 balanceA_ = tokenBalanceOf(e, Atoken, e.msg.sender);
-    uint256 balanceS_ = tokenBalanceOf(e, static, e.msg.sender);
-    uint256 balanceR_ = tokenBalanceOf(e, rewardToken(), e.msg.sender);
-
-    uint256 balanceUr_ = tokenBalanceOf(e, asset, l2Recipient);
-    uint256 balanceAr_ = tokenBalanceOf(e, Atoken, l2Recipient);
-    uint256 balanceSr_ = tokenBalanceOf(e, static, l2Recipient);
-    uint256 balanceRr_ = tokenBalanceOf(e, rewardToken(), l2Recipient);
-
-    assert _balanceU == balanceU_;
-    assert _balanceA == balanceA_;
-    assert _balanceS == balanceS_;
-    assert _balanceR == balanceR_;
-    assert _balanceUr == balanceUr_;
-    assert _balanceAr == balanceAr_;
-    assert _balanceSr == balanceSr_;
-    assert _balanceRr == balanceRr_;
-}
-
 // added 6
 rule zeroWithdrawRevert(uint256 amount, method f) {
     env e;
