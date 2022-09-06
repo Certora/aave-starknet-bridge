@@ -33,7 +33,7 @@ certoraRun certora/harness/BridgeHarness.sol \
         --rule_sanity \
         --cloud \
         $RULE \
-        --msg "AAVE S-Net"
+        --msg "AAVE S-Net $1 $2"
 
 # The first lines (#1-#11) specifies all the contracts that are being called through the BridgeHarness.sol file.
 # This is a declaration of multiple contracts for the verification context.

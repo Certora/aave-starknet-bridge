@@ -264,9 +264,12 @@ filtered{f -> messageSentFilter(f)} {
 }
 
 // added 1
-rule noImpactOnOther(method f, uint256 amount)
+rule noImpactOnOther(method f, uint256 amount) filtered {
+    f -> f.selector==receiveRewards(uint256,address,uint256).selector
+}
 {
-    env e;    
+    env e;  
+    calldataarg args;  
     address asset;
     address AToken;
     address static;
@@ -555,7 +558,9 @@ rule zeroStaticATokensCannotWithdraw(uint256 amount, method f) filtered {
     uint256 _balanceSr = tokenBalanceOf(e, static, l2Recipient);
     uint256 _balanceRr = tokenBalanceOf(e, rewardToken(), l2Recipient);
 
-    initiateWithdraw_L2(e, Atoken, amount, l2Recipient, fromToUA);
+    initiateWithdraw_L2@withrevert(e, Atoken, amount, l2Recipient, fromToUA);
+    bool succeeded = !lastReverted;
+    assert succeeded;
 
     uint256 balanceU_ = tokenBalanceOf(e, asset, e.msg.sender);
     uint256 balanceA_ = tokenBalanceOf(e, Atoken, e.msg.sender);
@@ -761,9 +766,9 @@ rule cannotBeCalledExternally(method f) filtered{f -> !messageSentFilter(f)}
     env e; 
     calldataarg args;
     require withdrawMessageStatus(e)==false && bridgeRewardsMessageStatus(e)==false;
-    f(e, args);
-
-    assert false; // unreachable
+    f@withrevert(e, args);
+    bool succeeded = !lastReverted;
+    assert succeeded==false; // unreachable
 }
 
 // added 12
@@ -1001,12 +1006,8 @@ function callFunctionSetParams(
         bridgeRewards_L2(e, receiver, amount);
         return 0;
     }
-        else if (f.selector == updateL2State(address).selector) {
+    else if (f.selector == updateL2State(address).selector) {
         updateL2State(e, aToken);
-        return 0;
-    }
-    else if (f.selector == withdraw(address,uint256,address,uint256,uint256,bool).selector) {
-        withdraw(e, aToken, e.msg.sender, receiver, amount, BRIDGE_L2.l2RewardsIndex(),fromToUnderlyingAsset);
         return 0;
     }
     else {
