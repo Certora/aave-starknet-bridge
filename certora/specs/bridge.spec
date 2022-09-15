@@ -121,6 +121,7 @@ methods {
     ATOKEN_B.UNDERLYING_ASSET_ADDRESS() returns (address) envfree  
     claimRewards(address) returns (uint256) => DISPATCHER(true)
     getRewTokenAddress() returns (address) => rewardToken()
+    STATIC_ATOKEN_A.totalSupply() returns(uint256) envfree
 
 /******************
  *     Ray Math   *
@@ -227,47 +228,37 @@ filtered{f -> messageSentFilter(f) && f.selector != bridgeRewards_L2(address, ui
     assert rewardTokenBalance_ >= _rewardTokenBalance;
 }
 
-rule supplyOfStaticATokenVsAToken(env e,address asset,address AToken,address static,address recipient,bool fromToUnderlyingAsset,uint256 amount,method f) 
-filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
-    setupTokens(asset, AToken, static);
-    setupUser(e.msg.sender);
-    
-    uint256 _balanceOfAToken = tokenBalanceOf(e, AToken);
-    uint256 _totalSupplyOfStaticAToken = STATIC_ATOKEN_A.totalSupply();
-    uint256 _supply = _staticToDynamicAmount_Wrapper(_totalSupplyOfStaticAToken, asset, LENDINGPOOL_L1);
-    require static == STATIC_ATOKEN_A;
-
-    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUnderlyingAsset);
-
-    uint256 balanceOfAToken_ = tokenBalanceOf(e, AToken);
-    uint256 totalSupplyOfStaticAToken_ = STATIC_ATOKEN_A.totalSupply();
-
-    uint256 supplyAfter = _staticToDynamicAmount_Wrapper(totalSupplyOfStaticAToken_, asset, LENDINGPOOL_L1);
-
-    assert _supply <= _balanceOfAToken => supplyAfter <= balanceOfAToken_;
-}
-
-rule approvedTokenLengthCanOnlyBeChangedBySpecificFunctions(method f,env e,address asset,address AToken,address static,address recipient,bool fromToUA,uint256 amount) 
+rule approvedTokenLengthCanOnlyBeChangedBySpecificFunctions(method f,env e,address asset,address AToken,address static,address recipient,bool fromToUA,uint256 amount,uint16 referralCode) 
 filtered{f -> messageSentFilter(f)} {
 
     setupTokens(asset, AToken, static);
     setupUser(e.msg.sender);
-    uint256 _approvedL1TokensLength = getApprovedL1TokensLength();
-    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
+    uint256 _approvedL1TokensLength = getApprovedL1TokensLength(e);
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA,referralCode);
 
-    uint256 approvedL1TokensLength_ = getApprovedL1TokensLength();
+    uint256 approvedL1TokensLength_ = getApprovedL1TokensLength(e);
     assert approvedL1TokensLength_ != _approvedL1TokensLength => f.selector == initialize(uint256, address, address, address[], uint256[]).selector;
 }
 
-rule staticBalanceCanOnlyBeChangedBySpecificFunction(method f,env e,address asset,address AToken,address static,address recipient,bool fromToUnderlyingAsset,uint256 amount) filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
+rule willRevertWhenWithdrawingZeroStaticTokenBalance(bool toUnderlyingAsset,uint256 staticAmount,env e,calldataarg args,address underlying,address static,address aToken,address recipient) {
+    
+    setupTokens(underlying, aToken, static);
+    setupUser(e.msg.sender);
+    require recipient != aToken;
+    require recipient != currentContract;
+    uint256 staticTokenBalance = tokenBalanceOf(e, static, e.msg.sender);
+    initiateWithdraw_L2@withrevert(e, aToken, staticAmount, recipient, toUnderlyingAsset);
+
+    assert staticTokenBalance == 0 => lastReverted == true;
+}
+
+rule staticBalanceCanOnlyBeChangedBySpecificFunction(method f,env e,address asset,address AToken,address static,address recipient,bool fromToUnderlyingAsset,uint256 amount,uint16 referralCode) filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
     setupTokens(asset, AToken, static);
     setupUser(e.msg.sender);
     uint256 _staticTokenBalanceOfRecipient = tokenBalanceOf(e, static, recipient);
-    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUnderlyingAsset,referralCode);
 
     uint256 staticTokenBalanceOfRecipient_ = tokenBalanceOf(e, static, recipient);
-
-    bool balancesChanged = ;
 
     assert staticTokenBalanceOfRecipient_ != _staticTokenBalanceOfRecipient =>f.selector == deposit(address, uint256, uint256, uint16, bool).selector || f.selector == initiateWithdraw_L2(address, uint256, address, bool).selector;
 }
@@ -281,7 +272,7 @@ rule bridgeRewardsIntegrity(address recipient, env e, address asset,address stat
     require recipient != currentContract;
     require recipient != e.msg.sender;
     require rewardAmount > 0;
-    require rewardToken == getRewardToken(e);
+    require rewardToken == getRewardTokenAddress(e);
 
     uint256 _assetBalance = tokenBalanceOf(e, asset, recipient);
     uint256 _aTokenBalance = tokenBalanceOf(e, aToken, recipient);
