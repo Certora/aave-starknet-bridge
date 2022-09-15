@@ -49,6 +49,8 @@ methods {
     // In CVL we contracts are addresses an therefore we demand return of an address
     getATokenOfUnderlyingAsset(address, address) returns (address) envfree
     getLendingPoolOfAToken(address) returns (address) envfree //(ILendingPool)
+    getRewardTokenAddress() returns address
+    getApprovedL1TokensLength() returns (uint256)
     _staticToDynamicAmount_Wrapper(uint256, address, address) envfree //(ILendingPool)
     _dynamicToStaticAmount_Wrapper(uint256, address, address) envfree //(ILendingPool)
     _computeRewardsDiff_Wrapper(uint256, uint256, uint256) envfree
@@ -57,6 +59,8 @@ methods {
     bridgeRewards_L2(address, uint256)
     getUnderlyingAssetOfAToken(address) returns (address) envfree
     underlyingtoAToken(address) returns (address) => DISPATCHER(true)
+    getRewardBalance(address) returns(uint256) 
+
 
 /******************************
  *     IStarknetMessaging     *
@@ -117,6 +121,7 @@ methods {
     ATOKEN_B.UNDERLYING_ASSET_ADDRESS() returns (address) envfree  
     claimRewards(address) returns (uint256) => DISPATCHER(true)
     getRewTokenAddress() returns (address) => rewardToken()
+    STATIC_ATOKEN_A.totalSupply() returns(uint256) envfree
 
 /******************
  *     Ray Math   *
@@ -163,6 +168,128 @@ definition messageSentFilter(method f) returns bool =
 ////////////////////////////////////////////////////////////////////////////
 //                       Rules                                            //
 ////////////////////////////////////////////////////////////////////////////
+
+
+invariant zeroAddressDoesNotHoldStaticTokenOrATokens(env e)
+    tokenBalanceOf(e, ATOKEN_A, 0) == 0 && tokenBalanceOf(e, STATIC_ATOKEN_A, 0) == 0 
+
+rule tokenBalanceOfUserCanNotBeChangedByOther(method f, calldataarg args,address asset, address user, address token, address AToken, address static, address receiver, env e)
+filtered{f -> messageSentFilter(f)} {
+
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+    setupUser(receiver);
+
+    uint256 _staticTokenBalance = tokenBalanceOf(e, static, receiver);
+    uint256 _aTokenBalance = tokenBalanceOf(e, AToken, receiver);
+    uint256 _assetBalance = tokenBalanceOf(e, asset, receiver);
+
+    f(e, args);
+
+    uint256 staticTokenBalance_ = tokenBalanceOf(e, static, receiver);
+    uint256 aTokenBalance_ = tokenBalanceOf(e, AToken, receiver);
+    uint256 assetBalance_ = tokenBalanceOf(e, asset, receiver);
+
+    bool anyBalanceChanged = _assetBalance > assetBalance_ || _aTokenBalance > aTokenBalance_ || _staticTokenBalance > staticTokenBalance_;
+
+    assert anyBalanceChanged == true => e.msg.sender == receiver;
+}
+
+rule bridgeRewardsDoesNotChangeSumOfRewardBalance(method f, env e,address asset,address Atoken,address static,address receiver,uint256 amount,bool fromToUnderlyingAsset,uint16 referralCode)
+filtered{f -> messageSentFilter(f)} {
+    setupTokens(asset, Atoken, static);
+    requireValidUser(e.msg.sender);
+
+    uint256 _senderRewardBalance = getRewardBalance(e,e.msg.sender);
+    uint256 _receiverRewardBalance = getRewardBalance(e,receiver);
+
+    bridgeRewards_L2(e,receiver,amount);
+
+    uint256 senderRewardBalance_ = getRewardBalance(e,e.msg.sender);
+    uint256 receiverRewardBalance_ = getRewardBalance(e,receiver);
+
+    uint256 balanceSumBefore = _senderRewardBalance + _receiverRewardBalance;
+    uint256 balanceSumAfter = senderRewardBalance_ + receiverRewardBalance_;
+
+    assert _senderRewardBalance + _receiverRewardBalance == senderRewardBalance_ + receiverRewardBalance_;
+   
+}
+
+rule rewardBalanceNotDecresing(method f, env e, calldataarg args,address user,address receiver,address asset,address Atoken,address static,uint256 amount,bool fromToUnderlyingAsset,uint16 referralCode)
+filtered{f -> messageSentFilter(f) && f.selector != bridgeRewards_L2(address, uint256).selector} {
+
+    setupTokens(asset, Atoken, static);
+    requireValidUser(user);
+
+    uint256 _rewardTokenBalance = getRewardBalance(e,user);
+    callFunctionSetParams(f,e,receiver,Atoken,asset,amount,fromToUnderlyingAsset,referralCode);
+    uint256 rewardTokenBalance_ = getRewardBalance(e,user);
+
+    assert rewardTokenBalance_ >= _rewardTokenBalance;
+}
+
+rule approvedTokenLengthCanOnlyBeChangedBySpecificFunctions(method f,env e,address asset,address AToken,address static,address recipient,bool fromToUA,uint256 amount,uint16 referralCode) 
+filtered{f -> messageSentFilter(f)} {
+
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+    uint256 _approvedL1TokensLength = getApprovedL1TokensLength(e);
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA,referralCode);
+
+    uint256 approvedL1TokensLength_ = getApprovedL1TokensLength(e);
+    assert approvedL1TokensLength_ != _approvedL1TokensLength => f.selector == initialize(uint256, address, address, address[], uint256[]).selector;
+}
+
+rule willRevertWhenWithdrawingZeroStaticTokenBalance(bool toUnderlyingAsset,uint256 staticAmount,env e,calldataarg args,address underlying,address static,address aToken,address recipient) {
+    
+    setupTokens(underlying, aToken, static);
+    setupUser(e.msg.sender);
+    require recipient != aToken;
+    require recipient != currentContract;
+    uint256 staticTokenBalance = tokenBalanceOf(e, static, e.msg.sender);
+    initiateWithdraw_L2@withrevert(e, aToken, staticAmount, recipient, toUnderlyingAsset);
+
+    assert staticTokenBalance == 0 => lastReverted == true;
+}
+
+rule staticBalanceCanOnlyBeChangedBySpecificFunction(method f,env e,address asset,address AToken,address static,address recipient,bool fromToUnderlyingAsset,uint256 amount,uint16 referralCode) filtered{f-> excludeInitialize(f) && messageSentFilter(f)} {
+    setupTokens(asset, AToken, static);
+    setupUser(e.msg.sender);
+    uint256 _staticTokenBalanceOfRecipient = tokenBalanceOf(e, static, recipient);
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUnderlyingAsset,referralCode);
+
+    uint256 staticTokenBalanceOfRecipient_ = tokenBalanceOf(e, static, recipient);
+
+    assert staticTokenBalanceOfRecipient_ != _staticTokenBalanceOfRecipient =>f.selector == deposit(address, uint256, uint256, uint16, bool).selector || f.selector == initiateWithdraw_L2(address, uint256, address, bool).selector;
+}
+
+rule bridgeRewardsIntegrity(address recipient, env e, address asset,address static,address aToken,address rewardToken,uint256 rewardAmount) {
+
+    setupTokens(asset, aToken, static);
+    setupUser(e.msg.sender);
+
+    require recipient != aToken;
+    require recipient != currentContract;
+    require recipient != e.msg.sender;
+    require rewardAmount > 0;
+    require rewardToken == getRewardTokenAddress(e);
+
+    uint256 _assetBalance = tokenBalanceOf(e, asset, recipient);
+    uint256 _aTokenBalance = tokenBalanceOf(e, aToken, recipient);
+    uint256 _rewardTokenBalance = tokenBalanceOf(e, rewardToken, recipient);
+
+    bridgeRewards_L2(e, recipient, rewardAmount);
+
+    uint256 assetBalance_ = tokenBalanceOf(e, asset, recipient);
+    uint256 aTokenBalance_ = tokenBalanceOf(e, aToken, recipient);
+    uint256 rewardTokenBalance_ = tokenBalanceOf(e, rewardToken, recipient);
+
+    assert assetBalance_ == _assetBalance && aTokenBalance_ == _aTokenBalance && rewardTokenBalance_ == _rewardTokenBalance + rewardAmount;
+}
+
+
+
+
 
 /*
     @Rule - a template for rule description:
@@ -233,6 +360,7 @@ filtered{f -> messageSentFilter(f)} {
     address static;
     address recipient;
     bool fromToUA;
+    uint16 referralCode;
     
     setupTokens(asset, AToken, static);
     setupUser(e.msg.sender);
@@ -242,7 +370,7 @@ filtered{f -> messageSentFilter(f)} {
     uint256 recipientBalanceU1 = tokenBalanceOf(e, asset, recipient);
 
     // Call any interface function 
-    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA);
+    callFunctionSetParams(f, e, recipient, AToken, asset, amount, fromToUA, referralCode);
 
     // Underlying asset balances of sender and recipient after call.
     uint256 recipientBalanceA2 = tokenBalanceOf(e, AToken, recipient);
@@ -393,9 +521,10 @@ rule sanity(method f) {
     address static;
     uint256 amount; 
     bool fromToUnderlyingAsset;
+    uint16 referralCode;
     setupTokens(asset, aToken, static);
     setupUser(e.msg.sender);
-    callFunctionSetParams(f, e, receiver, aToken, asset, amount, fromToUnderlyingAsset);
+    callFunctionSetParams(f, e, receiver, aToken, asset, amount, fromToUnderlyingAsset,referralCode);
     assert false;
 }
 
@@ -517,7 +646,7 @@ function rewardToken() returns address {
 function callFunctionSetParams(
     method f, env e, address receiver,
     address aToken, address asset,
-    uint256 amount, bool fromToUnderlyingAsset) returns uint256 {
+    uint256 amount, bool fromToUnderlyingAsset,uint16 referralCode) returns uint256 {
     // Inhibits the user from calling the functions withdraw and receiveRewards.
     // Expect unreachability for these functions (intended). 
     requireInvariant alwaysUnSent(e);
@@ -527,7 +656,6 @@ function callFunctionSetParams(
     }   
     else if (f.selector == deposit(address, uint256, uint256, uint16, bool).selector){
         uint256 l2Recipient = BRIDGE_L2.address2uint256(receiver);
-        uint16 referralCode;
         require receiver != currentContract;
         return deposit(e, aToken, l2Recipient, amount, referralCode, fromToUnderlyingAsset);
     }
