@@ -611,7 +611,7 @@ rule unapproved_token_cannot_be_deposited() {
         Deposit affects balances of asset, aToken and staticToken on various addresses.
         Make sure the balances are updated properly. 
 */
-rule integrity_of_deposit() {
+rule integrity_of_deposit(address recipient) {
     env e;
     setupUser(e.msg.sender);
     
@@ -621,7 +621,7 @@ rule integrity_of_deposit() {
     requireRayIndex(asset);
     setupTokens(asset, aToken, static);
 
-    uint256 l2Recipient = BRIDGE_L2.address2uint256(e.msg.sender);
+    uint256 l2Recipient = BRIDGE_L2.address2uint256(recipient);
     uint16 referralCode;
     bool fromUA; // (deposit) from underlying asset
     uint256 amount;
@@ -633,7 +633,7 @@ rule integrity_of_deposit() {
     uint256 _userBalanceOfAsset = tokenBalanceOf(e, asset, e.msg.sender);
     uint256 _atokenBalanceOfAsset = tokenBalanceOf(e, asset, aToken);
     uint256 _poolBalanceOfAsset = tokenBalanceOf(e, asset, lendingPool);
-    uint256 _userBalanceOfStatic = tokenBalanceOf(e, static, e.msg.sender);
+    uint256 _recipientBalanceOfStatic = tokenBalanceOf(e, static, recipient);
 
     uint256 staticAmount = deposit(e, aToken, l2Recipient, amount, referralCode, fromUA);
 
@@ -642,7 +642,7 @@ rule integrity_of_deposit() {
     uint256 userBalanceOfAsset_ = tokenBalanceOf(e, asset, e.msg.sender);
     uint256 atokenBalanceOfAsset_ = tokenBalanceOf(e, asset, aToken);
     uint256 poolBalanceOfAsset_ = tokenBalanceOf(e, asset, lendingPool);
-    uint256 userBalanceOfStatic_ = tokenBalanceOf(e, static, e.msg.sender);
+    uint256 recipientBalanceOfStatic_ = tokenBalanceOf(e, static, recipient);
 
     if (fromUA) { // depositing underlying asset
         assert _userBalanceOfAsset - amount == userBalanceOfAsset_;
@@ -658,7 +658,7 @@ rule integrity_of_deposit() {
         assert _bridgeBalanceOfAToken < bridgeBalanceOfAToken_;
         assert _userBalanceOfAToken + _bridgeBalanceOfAToken == userBalanceOfAToken_ + bridgeBalanceOfAToken_;
     }
-    assert _userBalanceOfStatic + staticAmount == userBalanceOfStatic_;
+    assert _recipientBalanceOfStatic + staticAmount == recipientBalanceOfStatic_;
 }
 
 /*
